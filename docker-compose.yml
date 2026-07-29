@@ -1,0 +1,34 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-expensetracker}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-expensetracker}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-expensetracker}@db/${MYSQL_DATABASE:-expensetracker}
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-http://localhost:8000}
+      MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-}
+      CIMD_ALLOW_INSECURE_HTTP: ${CIMD_ALLOW_INSECURE_HTTP:-false}
+    volumes:
+      - oauth_keys:/app/keys
+
+volumes:
+  db_data:
+  oauth_keys:

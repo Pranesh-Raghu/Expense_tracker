@@ -1,2 +1,19 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+Scripts/
+pyvenv.cfg
+
+# Environment / secrets
+.env
+
+# OAuth RSA signing key (regenerated on first run if missing)
+keys/
+
+# Editors / OS
+.DS_Store

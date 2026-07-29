@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Enum
+from sqlalchemy import Enum  # pyright: ignore[reportMissingImports]
 
 
 # Enum for Expense Category
