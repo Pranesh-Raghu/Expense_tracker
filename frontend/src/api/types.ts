@@ -73,12 +73,22 @@ export interface MessageResponse {
 export interface User {
   id: number
   username: string
+  email: string
+  avatar_url: string
+}
+
+export interface UserUpdateInput {
+  username?: string
+  email?: string
+  password?: string
 }
 
 export interface Me {
   id: number
   username: string
   is_admin: boolean
+  email: string | null
+  avatar_url: string | null
 }
 
 export interface Token {

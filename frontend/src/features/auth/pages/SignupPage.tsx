@@ -25,7 +25,7 @@ export function SignupPage() {
   async function onSubmit(values: SignupValues) {
     setFormError(null)
     try {
-      await usersApi.signup(values.username, values.password)
+      await usersApi.signup(values.username, values.email, values.password)
       await login(values.username, values.password)
       navigate('/')
     } catch (error) {
@@ -37,6 +37,15 @@ export function SignupPage() {
     <AuthLayout title="Create an account">
       <form className="space-y-3" onSubmit={handleSubmit(onSubmit)}>
         <Input placeholder="Username" {...register('username')} error={errors.username?.message} />
+        <Input
+          type="email"
+          placeholder="Email"
+          {...register('email')}
+          error={errors.email?.message}
+        />
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Used for your profile picture (via Gravatar) - not shown to other users.
+        </p>
         <Input
           type="password"
           placeholder="Password"

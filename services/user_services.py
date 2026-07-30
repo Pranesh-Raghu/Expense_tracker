@@ -21,7 +21,7 @@ def get_user(user_id: int):
     return user
 
 def update_user(user_data, user_id: int = Depends(user_dependency)):
-    user = User.update_user(user_data.model_dump(),user_id)
+    user = User.update_user(user_data.model_dump(exclude_none=True),user_id)
     validate_user(user)
     return user
 

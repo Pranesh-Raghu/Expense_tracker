@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 from services.user_services import update_user, get_user, get_users, delete_user, create_user, update_partial_user
-from schemas.user_schemas import UserCreate, UserResponse, DeleteResponse
+from schemas.user_schemas import UserCreate, UserUpdate, UserResponse, DeleteResponse
 from auth import user_dependency
 from authz import service as authz
 router = APIRouter()
@@ -18,10 +18,10 @@ def get__user(user_id: int, user: user_dependency):
     authz.require(user['id'] == user_id or authz.is_admin(user['id']))
     return get_user(user_id)
 
-@router.put("/{user_id}",status_code=status.HTTP_204_NO_CONTENT)
-def update__user(user_data:UserCreate,user_id:int, user: user_dependency):
+@router.put("/{user_id}", response_model=UserResponse, status_code=status.HTTP_200_OK)
+def update__user(user_data: UserUpdate, user_id: int, user: user_dependency):
     authz.require(user['id'] == user_id or authz.is_admin(user['id']))
-    return update_user(user_data,user_id)
+    return update_user(user_data, user_id)
 
 @router.patch("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def update__partial__user(user_id:int,user_data:dict, user: user_dependency):

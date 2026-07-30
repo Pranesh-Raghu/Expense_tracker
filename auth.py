@@ -9,6 +9,7 @@ from typing import Annotated
 from passlib.context import CryptContext  # pyright: ignore[reportMissingModuleSource]
 from models.user_model import User
 from schemas.user_schemas import Token
+from avatar import gravatar_url
 from oauth import service as oauth_service
 from oauth.schemas import (
     ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo,
@@ -185,7 +186,14 @@ def revoke_session(session_id: str, user: user_dependency):
 
 @router.get("/me")
 def get_my_permissions(user: user_dependency):
-    return {'username': user['username'], 'id': user['id'], 'is_admin': authz.is_admin(user['id'])}
+    db_user = User.get_user(user['id'])
+    return {
+        'username': user['username'],
+        'id': user['id'],
+        'is_admin': authz.is_admin(user['id']),
+        'email': db_user.email if db_user else None,
+        'avatar_url': gravatar_url(db_user.email) if db_user and db_user.email else None,
+    }
 
 
 @router.post("/admin/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)

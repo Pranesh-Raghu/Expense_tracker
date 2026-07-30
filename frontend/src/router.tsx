@@ -10,6 +10,7 @@ import { DashboardPage } from '@/features/expenses/pages/DashboardPage'
 import { ExpenseDetailPage } from '@/features/expenses/pages/ExpenseDetailPage'
 import { ReportsPage } from '@/features/reports/pages/ReportsPage'
 import { ApiKeysPage } from '@/features/settings/pages/ApiKeysPage'
+import { ProfilePage } from '@/features/settings/pages/ProfilePage'
 import { OAuthClientsPage } from '@/features/admin/pages/OAuthClientsPage'
 import { TokenToolsPage } from '@/features/admin/pages/TokenToolsPage'
 import { AdminUsersPage } from '@/features/admin/pages/AdminUsersPage'
@@ -60,6 +61,16 @@ export const router = createBrowserRouter([
           <RequireAuth>
             <AppShell>
               <ApiKeysPage />
+            </AppShell>
+          </RequireAuth>
+        ),
+      },
+      {
+        path: '/settings/profile',
+        element: (
+          <RequireAuth>
+            <AppShell>
+              <ProfilePage />
             </AppShell>
           </RequireAuth>
         ),

@@ -20,6 +20,7 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>
   loginWithApiKey: (key: string) => Promise<void>
   logout: () => void
+  refreshUser: () => Promise<void>
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -159,8 +160,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       loginWithApiKey,
       logout,
+      refreshUser: refreshMe,
     }),
-    [user, kind, isBootstrapping, expiryWarning, login, loginWithApiKey, logout],
+    [user, kind, isBootstrapping, expiryWarning, login, loginWithApiKey, logout, refreshMe],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

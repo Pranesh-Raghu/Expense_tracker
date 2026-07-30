@@ -12,6 +12,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -28,6 +29,7 @@ class User(Base):
            hashed_password = pwd_context.hash(user_credentials.password)
            db_user = User(id = new_id,
                           username = user_credentials.username,
+                          email = user_credentials.email,
                           password = hashed_password,
                           )
            db.add(db_user)
@@ -54,6 +56,8 @@ class User(Base):
                 
          if 'username' in user_credentials:
             user.username = user_credentials['username']
+         if 'email' in user_credentials:
+            user.email = user_credentials['email']
          if 'password' in user_credentials:
             user.password = pwd_context.hash(user_credentials['password'])
             
