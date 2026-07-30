@@ -107,6 +107,9 @@ class SessionInfo(BaseModel):
     client_id: str
     user_agent: Optional[str] = None
     ip_address: Optional[str] = None
+    # Best-effort, resolved at read time via geoip.city_for_ip - None for
+    # private/local IPs or if the lookup fails.
+    city: Optional[str] = None
     created_at: datetime
     last_used_at: datetime
 

@@ -9,6 +9,8 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
+
+from geoip import city_for_ip
 from passlib.context import CryptContext
 
 from database import SessionLocal
@@ -299,6 +301,7 @@ def list_sessions(user_id: int) -> list[dict]:
                 "client_id": r.client_id,
                 "user_agent": r.user_agent,
                 "ip_address": r.ip_address,
+                "city": city_for_ip(r.ip_address),
                 "created_at": r.created_at,
                 "last_used_at": r.last_used_at,
             }

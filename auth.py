@@ -184,6 +184,21 @@ def revoke_session(session_id: str, user: user_dependency):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Session not found')
 
 
+@router.get("/admin/{target_user_id}/sessions", response_model=list[SessionInfo])
+def list_user_sessions(target_user_id: int, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can view another user\'s sessions')
+    return oauth_service.list_sessions(target_user_id)
+
+
+@router.delete("/admin/{target_user_id}/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_user_session(target_user_id: int, session_id: str, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can revoke another user\'s session')
+    if not oauth_service.revoke_session(user_id=target_user_id, session_id=session_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Session not found')
+
+
 @router.get("/me")
 def get_my_permissions(user: user_dependency):
     db_user = User.get_user(user['id'])

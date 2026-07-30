@@ -96,6 +96,16 @@ export interface Token {
   token_type: string
 }
 
+export interface SessionInfo {
+  session_id: string
+  client_id: string
+  user_agent: string | null
+  ip_address: string | null
+  city: string | null
+  created_at: string
+  last_used_at: string
+}
+
 export interface ApiKeyInfo {
   key_id: string
   name: string | null

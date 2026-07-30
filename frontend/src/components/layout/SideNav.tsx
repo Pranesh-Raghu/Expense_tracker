@@ -32,6 +32,9 @@ function NavLinks({ onNavigate }: { onNavigate: () => void }) {
       <NavLink to="/settings/profile" className={LINK_CLASS} onClick={onNavigate}>
         Profile
       </NavLink>
+      <NavLink to="/settings/sessions" className={LINK_CLASS} onClick={onNavigate}>
+        Sessions & devices
+      </NavLink>
       <NavLink to="/settings/api-keys" className={LINK_CLASS} onClick={onNavigate}>
         API keys
       </NavLink>

@@ -11,6 +11,7 @@ import { ExpenseDetailPage } from '@/features/expenses/pages/ExpenseDetailPage'
 import { ReportsPage } from '@/features/reports/pages/ReportsPage'
 import { ApiKeysPage } from '@/features/settings/pages/ApiKeysPage'
 import { ProfilePage } from '@/features/settings/pages/ProfilePage'
+import { SessionsPage } from '@/features/settings/pages/SessionsPage'
 import { OAuthClientsPage } from '@/features/admin/pages/OAuthClientsPage'
 import { TokenToolsPage } from '@/features/admin/pages/TokenToolsPage'
 import { AdminUsersPage } from '@/features/admin/pages/AdminUsersPage'
@@ -71,6 +72,16 @@ export const router = createBrowserRouter([
           <RequireAuth>
             <AppShell>
               <ProfilePage />
+            </AppShell>
+          </RequireAuth>
+        ),
+      },
+      {
+        path: '/settings/sessions',
+        element: (
+          <RequireAuth>
+            <AppShell>
+              <SessionsPage />
             </AppShell>
           </RequireAuth>
         ),
