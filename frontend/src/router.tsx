@@ -16,6 +16,7 @@ import { SessionsPage } from '@/features/settings/pages/SessionsPage'
 import { OAuthClientsPage } from '@/features/admin/pages/OAuthClientsPage'
 import { TokenToolsPage } from '@/features/admin/pages/TokenToolsPage'
 import { AdminUsersPage } from '@/features/admin/pages/AdminUsersPage'
+import { WebhooksPage } from '@/features/admin/pages/WebhooksPage'
 
 // /oauth/authorize (the consent screen) stays server-rendered Jinja
 // (templates/login.html) - it deliberately has no route here so the SPA
@@ -118,6 +119,16 @@ export const router = createBrowserRouter([
           <RequireAdmin>
             <AppShell>
               <AdminUsersPage />
+            </AppShell>
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: '/admin/webhooks',
+        element: (
+          <RequireAdmin>
+            <AppShell>
+              <WebhooksPage />
             </AppShell>
           </RequireAdmin>
         ),

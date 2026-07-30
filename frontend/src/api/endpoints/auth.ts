@@ -1,5 +1,13 @@
 import { apiFetch } from '../client'
-import type { ApiKeyCreateResponse, ApiKeyInfo, Me, SessionInfo, Token } from '../types'
+import type {
+  ApiKeyCreateResponse,
+  ApiKeyInfo,
+  Me,
+  SessionInfo,
+  Token,
+  WebhookCreateResponse,
+  WebhookInfo,
+} from '../types'
 
 export function login(username: string, password: string): Promise<Token> {
   return apiFetch<Token>('/auth/token', { method: 'POST', form: { username, password } })
@@ -47,4 +55,19 @@ export function listUserSessions(targetUserId: number): Promise<SessionInfo[]> {
 
 export function revokeUserSession(targetUserId: number, sessionId: string): Promise<void> {
   return apiFetch<void>(`/auth/admin/${targetUserId}/sessions/${sessionId}`, { method: 'DELETE' })
+}
+
+// Admin-only, enforced server-side. The signing secret is shown once, in
+// the create response - it's needed to verify the HMAC signature on each
+// delivery, and isn't retrievable again after this.
+export function createWebhook(url: string, events: string[]): Promise<WebhookCreateResponse> {
+  return apiFetch<WebhookCreateResponse>('/auth/webhooks', { method: 'POST', body: { url, events } })
+}
+
+export function listWebhooks(): Promise<WebhookInfo[]> {
+  return apiFetch<WebhookInfo[]>('/auth/webhooks')
+}
+
+export function deleteWebhook(id: number): Promise<void> {
+  return apiFetch<void>(`/auth/webhooks/${id}`, { method: 'DELETE' })
 }

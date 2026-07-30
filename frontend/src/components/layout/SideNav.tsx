@@ -51,6 +51,9 @@ function NavLinks({ onNavigate }: { onNavigate: () => void }) {
           <NavLink to="/admin/users" className={LINK_CLASS} onClick={onNavigate}>
             Users
           </NavLink>
+          <NavLink to="/admin/webhooks" className={LINK_CLASS} onClick={onNavigate}>
+            Webhooks
+          </NavLink>
         </>
       )}
     </>

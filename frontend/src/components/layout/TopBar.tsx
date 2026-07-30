@@ -1,5 +1,6 @@
 import { useAuth } from '@/auth/useAuth'
 import { Badge } from '@/components/ui/Badge'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { AccountMenu } from './AccountMenu'
 
 export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
@@ -22,6 +23,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
         {kind === 'apikey' && <Badge tone="brand" className="hidden sm:inline-flex">API key session</Badge>}
+        <ThemeToggle />
         <AccountMenu />
       </div>
     </header>

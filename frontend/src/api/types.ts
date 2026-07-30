@@ -106,6 +106,29 @@ export interface SessionInfo {
   last_used_at: string
 }
 
+export const WEBHOOK_EVENT_TYPES = [
+  'user.login',
+  'expense.created',
+  'expense.updated',
+  'expense.shared',
+  'expense.deleted',
+] as const
+
+export interface WebhookInfo {
+  id: number
+  url: string
+  events: string[]
+  active: boolean
+  created_at: string
+}
+
+export interface WebhookCreateResponse {
+  id: number
+  url: string
+  secret: string
+  events: string[]
+}
+
 export interface ApiKeyInfo {
   key_id: string
   name: string | null
