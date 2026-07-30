@@ -33,7 +33,7 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <Button onClick={() => setAddOpen(true)}>Add expense</Button>
       </div>
@@ -53,7 +53,7 @@ export function DashboardPage() {
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-semibold">All expenses</h2>
           <ExpenseFilters filters={filters} onChange={setFilters} />
         </div>

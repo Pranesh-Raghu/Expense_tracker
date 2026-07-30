@@ -16,8 +16,8 @@ export function ExpenseFilters({ filters, onChange }: ExpenseFiltersProps) {
   const { data: transactionTypes } = useTransactionTypes()
 
   return (
-    <div className="flex gap-3">
-      <div className="w-48">
+    <div className="flex flex-col gap-3 sm:flex-row">
+      <div className="w-full sm:w-48">
         <Select
           value={filters.category ?? ''}
           onChange={(e) => onChange(e.target.value ? { category: e.target.value as Filters['category'] } : {})}
@@ -31,7 +31,7 @@ export function ExpenseFilters({ filters, onChange }: ExpenseFiltersProps) {
         </Select>
       </div>
 
-      <div className="w-48">
+      <div className="w-full sm:w-48">
         <Select
           value={filters.transaction ?? ''}
           onChange={(e) =>
