@@ -59,6 +59,15 @@ class RefreshToken(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked = Column(Boolean, default=False)
 
+    # Session/device metadata, captured at issuance time from the request
+    # that hit /oauth/token or /auth/token - lets a user see (and kill) each
+    # of their logged-in devices individually, same idea as "active
+    # sessions" in most real apps.
+    user_agent = Column(String(512), nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    last_used_at = Column(DateTime(timezone=True), default=utcnow)
+
 
 class RevokedAccessToken(Base):
     """JTIs of access tokens revoked before their natural expiry."""
@@ -85,3 +94,58 @@ class ApiKey(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked = Column(Boolean, default=False)
+
+
+class TrustedIssuer(Base):
+    """An external identity provider this server trusts for Cross-App Access
+    (RFC 7523 JWT-bearer grant): a client already holding a signed identity
+    assertion from one of these issuers can exchange it at /oauth/token for
+    a native access token here, with no interactive login at this server.
+
+    This is a genuine trust boundary, not a formality - only add an issuer
+    here if you actually trust whoever controls its private key to assert
+    who your users are.
+    """
+
+    __tablename__ = "oauth_trusted_issuers"
+
+    issuer = Column(String(512), primary_key=True)
+    jwks_url = Column(String(512), nullable=False)
+    # Which claim in the assertion maps to our local username.
+    subject_claim = Column(String(64), nullable=False, default="preferred_username")
+    # JSON list of client_ids allowed to use this issuer; null/empty = any
+    # registered (DCR or CIMD) client may.
+    allowed_client_ids = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookEndpoint(Base):
+    """A URL to notify when subscribed events happen. Payloads are signed
+    with HMAC-SHA256 (see webhooks.py) so the receiver can verify a request
+    genuinely came from this app and wasn't forged or replayed-with-edits.
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id = Column(Integer, primary_key=True)
+    url = Column(String(1024), nullable=False)
+    secret = Column(String(255), nullable=False)
+    events = Column(Text, nullable=False)  # JSON list, e.g. ["expense.created", "expense.shared"]
+    created_by_user_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    active = Column(Boolean, default=True)
+
+
+class PasswordlessToken(Base):
+    """A one-time magic-link token. No email service exists in this project,
+    so the raw token is returned directly in the API response instead of
+    being emailed - that's the demo stand-in, not the intended real-world
+    delivery mechanism."""
+
+    __tablename__ = "passwordless_tokens"
+
+    token_hash = Column(String(255), primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)

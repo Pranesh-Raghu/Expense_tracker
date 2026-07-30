@@ -27,6 +27,7 @@ share which expenses.
 - [Database schema](#database-schema)
 - [Testing the OAuth + MCP flow end to end](#testing-the-oauth--mcp-flow-end-to-end)
 - [Testing RBAC + sharing end to end](#testing-rbac--sharing-end-to-end)
+- [Automated tests](#automated-tests)
 - [Project structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Security notes](#security-notes)
@@ -285,6 +286,14 @@ Refresh tokens (30 day TTL) rotate on every use: the old one is revoked as
 soon as a new pair is issued, so a captured-and-replayed refresh token stops
 working the moment the legitimate client refreshes.
 
+**Scope enforcement**: request `scope=expenses:read` or `scope=expenses:write`
+on `/oauth/authorize` to cap what the resulting token can do, independent of
+what the user themselves is otherwise allowed (RBAC/FGA). Enforced on every
+MCP tool (`mcp_server.py`'s `_require_scope`) - a read-only token gets a
+clear rejection from any write tool. A token with **no** scope requested at
+all is treated as unrestricted (matches how every token behaved before scope
+enforcement existed - nothing broke).
+
 ### Dynamic Client Registration (DCR)
 
 ```bash
@@ -481,12 +490,12 @@ unlike the CRUD tools above; see
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/users/` | none | Create a user |
-| `GET` | `/users/` | none | List users |
-| `GET` | `/users/{id}` | none | Get a user |
-| `PUT` | `/users/{id}` | none | Replace a user |
-| `PATCH` | `/users/{id}` | none | Partially update a user |
-| `DELETE` | `/users/{id}` | none | Delete a user |
+| `POST` | `/users/` | none | Create a user (registration - stays public by necessity) |
+| `GET` | `/users/` | Bearer | List users |
+| `GET` | `/users/{id}` | Bearer (self or admin) | Get a user |
+| `PUT` | `/users/{id}` | Bearer (self or admin) | Replace a user |
+| `PATCH` | `/users/{id}` | Bearer (admin) | Partially update a user |
+| `DELETE` | `/users/{id}` | Bearer (admin) | Delete a user |
 | `POST` | `/auth/token` | none | Log in, get a REST session JWT |
 | `POST` | `/auth/api-keys` | Bearer | Create an API key |
 | `GET` | `/auth/api-keys` | Bearer | List your API keys |
@@ -500,10 +509,9 @@ unlike the CRUD tools above; see
 
 Interactive docs: `http://localhost:8000/docs`.
 
-> The `/users` endpoints have no auth guard in the current code (pre-existing
-> in this project, not added as part of the OAuth/MCP work) - anyone can
-> create, list, or delete a user. Don't run this outside a trusted local/demo
-> environment without adding one.
+> `POST /users/` (registration) is the only unauthenticated `/users` endpoint,
+> by necessity - everything else requires a Bearer token, and is scoped to
+> "yourself, or an admin" except delete/patch, which are admin-only.
 
 ## Database schema
 
@@ -664,6 +672,29 @@ The same sequence works identically through MCP tools
 of the REST endpoints above - swap the REST calls for
 `tools/call` with the matching tool name and arguments.
 
+## Automated tests
+
+Everything manually walked through above is also codified as a pytest
+integration suite (`tests/`) that runs against the **live** stack - this
+project is too tightly coupled to MySQL/OpenFGA/RSA keys to unit-test in
+isolation without mocking away the exact things worth testing.
+
+```bash
+docker compose up -d          # the stack must be running
+python3 -m venv .venv-test && source .venv-test/bin/activate
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+Covers: DCR, PKCE (including the wrong-verifier rejection path), refresh
+rotation + revocation, introspection, API keys (REST + revocation), MCP
+tool calls (including the unauthenticated 401 + discovery header), RBAC +
+FGA sharing (owner/viewer/editor/admin/unshare), scope enforcement (both
+the restriction and the unscoped-stays-unrestricted backward-compat case),
+and the `/users` lockdown. Each test creates its own uniquely-named users
+(`tests/conftest.py:unique()`) so runs don't collide with each other or
+with manual testing data.
+
 ## Project structure
 
 ```
@@ -704,9 +735,13 @@ Expense_tracker/
 │
 ├── mysql-init/                 # SQL run once on a FRESH MySQL volume only
 │   └── 01-create-openfga-db.sql  # creates the separate `openfga` database
+├── tests/                      # pytest integration suite, runs against the live stack
+│   └── conftest.py              # shared helpers: create_user, oauth_login, mcp_call, ...
 ├── Dockerfile                  # app image
 ├── docker-compose.yml           # app + MySQL + OpenFGA, with persisted volumes
 ├── .env.example                  # documented environment variables
+├── requirements-dev.txt          # pytest + requests, dev-only (not in the app image)
+├── pytest.ini                     # testpaths = tests
 └── keys/                          # persisted RSA signing key (docker volume, gitignored)
 ```
 
@@ -810,7 +845,6 @@ authorization server. Before using anything like this in production,
 consider:
 
 - Rate limiting on `/oauth/token`, `/oauth/authorize`, and `/auth/token` (none implemented here)
-- Locking down `/users/*`, which currently has no auth guard at all
 - A real secrets manager instead of `.env` files for `OAUTH_ISSUER`-adjacent
   values and `REST_JWT_SECRET_KEY`
 - Consent screen improvements (per-scope approval, not all-or-nothing)

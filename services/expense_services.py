@@ -1,9 +1,22 @@
 from fastapi import HTTPException
 from models.expense_model import Expense,ExpenseCategory, TransactionType, user_dependency
-from schemas.expense_schemas import ExpenseCreate, ExpenseUpdate
+from schemas.expense_schemas import ExpenseCreate, ExpenseUpdate, ExpensePermissions
 from services.expense_services import user_dependency  # noqa: F811
 from validators.expense_validators import date_month_year_validator, month_year_validator,year_validator,user_validator,expense_id_validator
 from authz import service as authz
+
+
+def _attach_permissions(user_id: int, expense):
+    # ExpenseResponse requires `permissions`, but it isn't a column on the
+    # Expense model - compute it from authz and hang it off the instance so
+    # response_model serialization picks it up like any other attribute.
+    expense.permissions = ExpensePermissions(
+        can_edit=authz.can_edit(user_id, expense.id),
+        can_delete=authz.can_delete(user_id, expense.id),
+        can_share=authz.can_share(user_id, expense.id),
+    )
+    return expense
+
 
 # Create Expense
 def create_expense(user: user_dependency,expense_data: ExpenseCreate):
@@ -14,7 +27,7 @@ def create_expense(user: user_dependency,expense_data: ExpenseCreate):
 
     authz.on_expense_created(owner_id=user.get('id'), expense_id=expense.id)
 
-    return expense
+    return _attach_permissions(user.get('id'), expense)
 
 
 # Get all Expenses: everything the user owns, plus anything shared with them
@@ -26,7 +39,9 @@ def get_all_expenses(user:user_dependency):
 
     expense_ids = authz.list_viewable_expense_ids(user.get('id'))
 
-    return Expense.get_expenses_by_ids(expense_ids)
+    expenses = Expense.get_expenses_by_ids(expense_ids)
+
+    return [_attach_permissions(user.get('id'), e) for e in expenses]
 
 
 def get_expense_by_id(user: user_dependency,expense_id: int):
@@ -42,7 +57,7 @@ def get_expense_by_id(user: user_dependency,expense_id: int):
 
     authz.require(authz.can_view(user.get('id'), expense_id), "You don't have permission to view this expense")
 
-    return expense
+    return _attach_permissions(user.get('id'), expense)
 
 
 def update_expense(user: user_dependency,expense_id:int,expense_data: ExpenseUpdate):
@@ -58,7 +73,7 @@ def update_expense(user: user_dependency,expense_id:int,expense_data: ExpenseUpd
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
 
-    return expense
+    return _attach_permissions(user.get('id'), expense)
 
 
 def share_expense(user: user_dependency, expense_id: int, target_user_id: int, relation: str):
@@ -98,6 +113,10 @@ def delete_expense(user:user_dependency,expense_id: int):
 
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
+
+    # Compute permissions before the authz tuples for this expense are torn
+    # down - afterwards every check would read as False.
+    _attach_permissions(user.get('id'), expense)
 
     authz.on_expense_deleted(expense_id)
 

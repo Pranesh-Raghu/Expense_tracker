@@ -53,6 +53,30 @@ class ApiKeyInfo(BaseModel):
     last_used_at: Optional[datetime] = None
 
 
+class TrustedIssuerCreateRequest(BaseModel):
+    issuer: str
+    jwks_url: str
+    subject_claim: str = "preferred_username"
+    allowed_client_ids: Optional[list[str]] = None
+
+
+class TrustedIssuerInfo(BaseModel):
+    issuer: str
+    jwks_url: str
+    subject_claim: str
+    allowed_client_ids: Optional[list[str]] = None
+    created_at: datetime
+
+
+class SessionInfo(BaseModel):
+    session_id: str
+    client_id: str
+    user_agent: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
+    last_used_at: datetime
+
+
 class IntrospectionResponse(BaseModel):
     active: bool
     scope: Optional[str] = None

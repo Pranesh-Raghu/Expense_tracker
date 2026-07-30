@@ -5,8 +5,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from models.user_model import User
-from oauth import keys, service
+from oauth import cross_app_access, keys, service
 from oauth.schemas import ClientRegistrationRequest, ClientRegistrationResponse
+
+JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
 router = APIRouter()
 
@@ -30,7 +32,7 @@ def authorization_server_metadata():
         "introspection_endpoint": f"{issuer}/oauth/introspect",
         "jwks_uri": f"{issuer}/.well-known/jwks.json",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": ["authorization_code", "refresh_token", JWT_BEARER_GRANT],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
         "scopes_supported": ["expenses:read", "expenses:write"],
@@ -153,18 +155,32 @@ async def authorize_submit(
 # Token endpoint
 # ---------------------------------------------------------------------------
 
+def _client_ip(request: Request) -> str | None:
+    # Behind ngrok/a reverse proxy, the real client IP is in X-Forwarded-For
+    # (first entry = original client); fall back to the direct connection.
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
 @router.post("/oauth/token")
 async def token(
+    request: Request,
     grant_type: str = Form(...),
     code: str | None = Form(None),
     redirect_uri: str | None = Form(None),
     code_verifier: str | None = Form(None),
     refresh_token: str | None = Form(None),
+    assertion: str | None = Form(None),
+    resource: str | None = Form(None),
     client_id: str = Form(...),
     client_secret: str | None = Form(None),
 ):
     client = await service.resolve_client(client_id)
     service.verify_client_secret(client, client_secret)
+    user_agent = request.headers.get("user-agent")
+    ip_address = _client_ip(request)
 
     if grant_type == "authorization_code":
         if not (code and redirect_uri and code_verifier):
@@ -174,13 +190,35 @@ async def token(
         )
         result = service.issue_token_pair(
             user_id=grant["user_id"], client_id=client_id, scope=grant["scope"], resource=grant["resource"],
+            user_agent=user_agent, ip_address=ip_address,
         )
         return JSONResponse(result)
 
     if grant_type == "refresh_token":
         if not refresh_token:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_request: missing refresh_token")
-        result = service.refresh_token_grant(refresh_token=refresh_token, client_id=client_id)
+        result = service.refresh_token_grant(
+            refresh_token=refresh_token, client_id=client_id, user_agent=user_agent, ip_address=ip_address,
+        )
+        return JSONResponse(result)
+
+    if grant_type == JWT_BEARER_GRANT:
+        # Cross-App Access (RFC 7523): exchange a signed identity assertion
+        # from a trusted external issuer for a native token here - no
+        # interactive login for this user at this server.
+        if not assertion:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_request: missing assertion")
+        verified = await cross_app_access.verify_identity_assertion(
+            assertion, client_id=client_id, expected_audience=service.ISSUER,
+        )
+        user = User.get_users()
+        matched = next((u for u in user if u.username == verified["subject"]), None)
+        if not matched:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: no local account matches the asserted identity")
+        result = service.issue_token_pair(
+            user_id=matched.id, client_id=client_id, scope=None, resource=resource,
+            user_agent=user_agent, ip_address=ip_address,
+        )
         return JSONResponse(result)
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_grant_type")

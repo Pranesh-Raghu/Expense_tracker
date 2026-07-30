@@ -214,8 +214,10 @@ def issue_access_token(*, user_id: int, client_id: str, scope: Optional[str], re
     return jwt.encode(claims, keys.get_signing_key_pem(), algorithm=ALGORITHM, headers={"kid": keys.KEY_ID})
 
 
-def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str]) -> str:
+def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str],
+                         user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> str:
     token = secrets.token_urlsafe(48)
+    now = _now()
     with SessionLocal() as db:
         db.add(RefreshToken(
             token_hash=_hash_token(token),
@@ -223,16 +225,24 @@ def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], r
             user_id=user_id,
             scope=scope,
             resource=resource,
-            expires_at=_now() + REFRESH_TOKEN_TTL,
+            expires_at=now + REFRESH_TOKEN_TTL,
             revoked=False,
+            user_agent=user_agent,
+            ip_address=ip_address,
+            created_at=now,
+            last_used_at=now,
         ))
         db.commit()
     return token
 
 
-def issue_token_pair(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str]) -> dict:
+def issue_token_pair(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str],
+                      user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> dict:
     access_token = issue_access_token(user_id=user_id, client_id=client_id, scope=scope, resource=resource)
-    refresh_token = issue_refresh_token(user_id=user_id, client_id=client_id, scope=scope, resource=resource)
+    refresh_token = issue_refresh_token(
+        user_id=user_id, client_id=client_id, scope=scope, resource=resource,
+        user_agent=user_agent, ip_address=ip_address,
+    )
     return {
         "access_token": access_token,
         "token_type": "Bearer",
@@ -242,7 +252,8 @@ def issue_token_pair(*, user_id: int, client_id: str, scope: Optional[str], reso
     }
 
 
-def refresh_token_grant(*, refresh_token: str, client_id: str) -> dict:
+def refresh_token_grant(*, refresh_token: str, client_id: str,
+                         user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> dict:
     token_hash = _hash_token(refresh_token)
     with SessionLocal() as db:
         record = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
@@ -259,7 +270,49 @@ def refresh_token_grant(*, refresh_token: str, client_id: str) -> dict:
         user_id, scope, resource = record.user_id, record.scope, record.resource
         db.commit()
 
-    return issue_token_pair(user_id=user_id, client_id=client_id, scope=scope, resource=resource)
+    return issue_token_pair(
+        user_id=user_id, client_id=client_id, scope=scope, resource=resource,
+        user_agent=user_agent, ip_address=ip_address,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sessions: one row per issued refresh token, with device/IP metadata
+# ---------------------------------------------------------------------------
+
+def list_sessions(user_id: int) -> list[dict]:
+    with SessionLocal() as db:
+        records = (
+            db.query(RefreshToken)
+            .filter(RefreshToken.user_id == user_id, RefreshToken.revoked.is_(False))
+            .order_by(RefreshToken.last_used_at.desc())
+            .all()
+        )
+        return [
+            {
+                "session_id": r.token_hash[:12],
+                "client_id": r.client_id,
+                "user_agent": r.user_agent,
+                "ip_address": r.ip_address,
+                "created_at": r.created_at,
+                "last_used_at": r.last_used_at,
+            }
+            for r in records
+        ]
+
+
+def revoke_session(*, user_id: int, session_id: str) -> bool:
+    with SessionLocal() as db:
+        record = (
+            db.query(RefreshToken)
+            .filter(RefreshToken.user_id == user_id, RefreshToken.token_hash.startswith(session_id))
+            .first()
+        )
+        if not record:
+            return False
+        record.revoked = True
+        db.commit()
+        return True
 
 
 def revoke_refresh_token(refresh_token: str) -> None:

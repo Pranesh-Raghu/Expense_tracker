@@ -1,0 +1,155 @@
+# Render Blueprint for the Expense Tracker. Deploys the same four services
+# as docker-compose.yml (db, openfga, app, frontend) as native Render
+# services instead of a single compose stack.
+#
+# Before running `render blueprint launch` / connecting this repo in the
+# Render dashboard, read the TODO in the frontend service's routes below -
+# the app service's real onrender.com hostname (or custom domain) only
+# exists after its first deploy, so there's an unavoidable chicken-and-egg
+# step: deploy once, then come back and fill in the real URL.
+#
+# Also worth double-checking against Render's current Blueprint reference
+# (https://render.com/docs/blueprint-spec) before deploying: the shape here
+# is accurate as of writing, but a couple of details - especially how a
+# service attaches to an `envVarGroups` entry - weren't confirmed against a
+# full example in Render's own docs, so verify that section in the
+# dashboard once the blueprint is synced.
+
+envVarGroups:
+  - name: expense-tracker-secrets
+    envVars:
+      - key: MYSQL_ROOT_PASSWORD
+        generateValue: true
+
+services:
+  # --- Database (private service, no public port) ---------------------
+  - name: expense-tracker-db
+    type: pserv
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./mysql/Dockerfile
+    dockerContext: .
+    envVarGroups:
+      - expense-tracker-secrets
+    envVars:
+      - key: MYSQL_DATABASE
+        value: expensetracker
+    disk:
+      name: mysql-data
+      mountPath: /var/lib/mysql
+      sizeGB: 10
+
+  # --- OpenFGA (private service, no public port) -----------------------
+  - name: expense-tracker-openfga
+    type: pserv
+    runtime: docker
+    dockerfilePath: ./openfga/Dockerfile
+    dockerContext: ./openfga
+    envVarGroups:
+      - expense-tracker-secrets
+    envVars:
+      - key: MYSQL_HOST
+        fromService:
+          name: expense-tracker-db
+          type: pserv
+          property: host
+      - key: MYSQL_PORT
+        fromService:
+          name: expense-tracker-db
+          type: pserv
+          property: port
+      - key: OPENFGA_DATASTORE_ENGINE
+        value: mysql
+      - key: OPENFGA_PLAYGROUND_ENABLED
+        value: "false"
+      - key: OPENFGA_LOG_FORMAT
+        value: text
+    # These are just args to openfga/entrypoint.sh's `exec /openfga "$@"` -
+    # it composes OPENFGA_DATASTORE_URI from the env vars above before
+    # exec'ing, so this stays a plain migrate/run split either way.
+    preDeployCommand: migrate
+    dockerCommand: run
+
+  # --- FastAPI app (public web service) ---------------------------------
+  - name: expense-tracker-app
+    type: web
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVarGroups:
+      - expense-tracker-secrets
+    envVars:
+      - key: MYSQL_HOST
+        fromService:
+          name: expense-tracker-db
+          type: pserv
+          property: host
+      - key: MYSQL_PORT
+        fromService:
+          name: expense-tracker-db
+          type: pserv
+          property: port
+      - key: OPENFGA_HOST
+        fromService:
+          name: expense-tracker-openfga
+          type: pserv
+          property: host
+      - key: OPENFGA_PORT
+        fromService:
+          name: expense-tracker-openfga
+          type: pserv
+          property: port
+      - key: FRONTEND_HOST
+        fromService:
+          name: expense-tracker-frontend
+          type: web
+          property: host
+      - key: CIMD_ALLOW_INSECURE_HTTP
+        value: "false"
+      - key: INITIAL_ADMIN_USERNAMES
+        value: ""
+    # DATABASE_URL, OAUTH_ISSUER, OPENFGA_API_URL, and CORS_ORIGINS are all
+    # composed strings built from the discrete values above (plus Render's
+    # own RENDER_EXTERNAL_URL) - same reasoning as the openfga service.
+    dockerCommand: >-
+      sh -c 'export DATABASE_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}/expensetracker";
+      export OAUTH_ISSUER="${RENDER_EXTERNAL_URL}";
+      export OPENFGA_API_URL="http://${OPENFGA_HOST}:${OPENFGA_PORT}";
+      export CORS_ORIGINS="https://${FRONTEND_HOST}";
+      uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'
+
+  # --- Frontend (static site, proxies API paths to the app) -------------
+  - name: expense-tracker-frontend
+    type: web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      # API rewrites must come before the SPA catch-all - Render evaluates
+      # routes in order. Same origin as the frontend, so no CORS round-trip
+      # actually happens for these in production; CORS_ORIGINS on the app
+      # is there for direct API access (curl, the OAuth/MCP flows) only.
+      #
+      # TODO: replace this literal URL once you know the app service's real
+      # onrender.com hostname (or your custom domain) - it isn't knowable
+      # until after the app service's first deploy.
+      - source: /auth/*
+        destination: https://expense-tracker-app.onrender.com/auth/*
+        type: rewrite
+      - source: /users/*
+        destination: https://expense-tracker-app.onrender.com/users/*
+        type: rewrite
+      - source: /expenses/*
+        destination: https://expense-tracker-app.onrender.com/expenses/*
+        type: rewrite
+      - source: /oauth/*
+        destination: https://expense-tracker-app.onrender.com/oauth/*
+        type: rewrite
+      - source: /.well-known/*
+        destination: https://expense-tracker-app.onrender.com/.well-known/*
+        type: rewrite
+      - source: /*
+        destination: /index.html
+        type: rewrite

@@ -2,8 +2,6 @@
 <html lang="en">
 <head>
     <link rel="stylesheet" type="text/css" href={{url_for('static', path='/css/base.css')}}>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src={{ url_for('static', path='/js/script.js')}}></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Expense Tracker</title>
@@ -12,43 +10,18 @@
     <header>
         <h1>Expense Tracker</h1>
     </header>
-    
+
     <main>
-        <section class="dashboard">
-            <h2>Dashboard</h2>
-            <div class="summary">
-                <p>Total Expenses: <span id="total-expense">$0.00</span></p>
-                <button onclick="addExpense()">Add Expense</button>
-            </div>
-            <form id="expense-form">
-                <label for="category">Category:</label>
-                <select id="category" name="category">
-                    <option value="food">Food</option>
-                    <option value="transport">Transport</option>
-                    <option value="entertainment">Entertainment</option>
-                    <option value="shopping">Shopping</option>
-                    <option value="other">Other</option>
-                </select>
-                
-                <label for="transaction-type">Transaction Type:</label>
-                <select id="transaction-type" name="transaction-type">
-                    <option value="income">Income</option>
-                    <option value="expense">Expense</option>
-                </select>
-            </form>
-            <ul id="expense-list"></ul>
-        </section>
-        <section class="dashboard">
-            <!-- ...existing content... -->
-            <ul id="expense-list"></ul>
-        
-            <!-- Add this canvas -->
-            <canvas id="expenseChart"></canvas>
-        </section>
-        
-
-
+        <!-- The dashboard, auth, and admin UI now live in the frontend/ SPA
+             (Vite dev server on :5173 in development; nginx on :80 behind
+             the frontend service in prod) rather than here. This route
+             stays only as a pointer, since /.well-known/*, /oauth/authorize,
+             and /mcp are all served by this same FastAPI app and must keep
+             their paths. -->
+        <p>
+            The dashboard has moved. Open the app at
+            <a href="http://localhost:5173">http://localhost:5173</a>.
+        </p>
     </main>
-    
 </body>
 </html>

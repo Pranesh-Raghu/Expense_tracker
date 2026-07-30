@@ -51,6 +51,7 @@ class Expense(Base):
                               amount = expense_data.amount,
                               category= expense_data.category,
                               transaction = expense_data.transaction,
+                              time = expense_data.time or datetime.now(),
                               user_id=user.get('id')
                               )
              db.add(expense)
@@ -82,7 +83,10 @@ class Expense(Base):
             
             if 'transaction' in expense_data:
                 expense.transaction = expense_data['transaction']
-                
+
+            if 'time' in expense_data:
+                expense.time = expense_data['time']
+
             db.commit()
             db.refresh(expense)
             

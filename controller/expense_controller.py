@@ -1,19 +1,9 @@
-from fastapi import APIRouter,  status,FastAPI
+from fastapi import APIRouter, status
 from schemas.expense_schemas import ExpenseCreate, ExpenseResponse, ExpenseUpdate,ExpenseCategoryResponse,ExpenseTransactionRespone,ExpenseReport,MonthlyExpenseAmount,DailyExpenseAmount, YearlyExpenseAmount, ShareExpenseRequest, MessageResponse
 from services import expense_services
 from models.expense_model import user_dependency
 from typing import List
-from fastapi.middleware.cors import CORSMiddleware
 router = APIRouter()
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @router.get("/", response_model=list[ExpenseResponse], status_code=status.HTTP_200_OK)

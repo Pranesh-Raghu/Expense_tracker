@@ -9,8 +9,11 @@ from passlib.context import CryptContext  # pyright: ignore[reportMissingModuleS
 from models.user_model import User
 from schemas.user_schemas import Token
 from oauth import service as oauth_service
-from oauth.schemas import ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo
+from oauth.schemas import ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo, SessionInfo
 from authz import service as authz
+import json
+from database import SessionLocal
+from oauth.models import TrustedIssuer
 
 router = APIRouter()
 
@@ -90,6 +93,17 @@ def revoke_api_key(key_id: str, user: user_dependency):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='API key not found')
 
 
+@router.get("/sessions", response_model=list[SessionInfo])
+def list_sessions(user: user_dependency):
+    return oauth_service.list_sessions(user['id'])
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_session(session_id: str, user: user_dependency):
+    if not oauth_service.revoke_session(user_id=user['id'], session_id=session_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Session not found')
+
+
 @router.get("/me")
 def get_my_permissions(user: user_dependency):
     return {'username': user['username'], 'id': user['id'], 'is_admin': authz.is_admin(user['id'])}
@@ -107,6 +121,54 @@ def revoke_admin(target_user_id: int, user: user_dependency):
     if not authz.is_admin(user['id']):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an existing admin can revoke admin')
     authz.revoke_admin(target_user_id)
+
+
+@router.get("/trusted-issuers", response_model=list[TrustedIssuerInfo])
+def list_trusted_issuers(user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can view trusted issuers')
+    with SessionLocal() as db:
+        rows = db.query(TrustedIssuer).all()
+        return [
+            TrustedIssuerInfo(
+                issuer=r.issuer, jwks_url=r.jwks_url, subject_claim=r.subject_claim,
+                allowed_client_ids=json.loads(r.allowed_client_ids) if r.allowed_client_ids else None,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+
+
+@router.post("/trusted-issuers", response_model=TrustedIssuerInfo, status_code=status.HTTP_201_CREATED)
+def add_trusted_issuer(payload: TrustedIssuerCreateRequest, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can add a trusted issuer')
+    with SessionLocal() as db:
+        if db.query(TrustedIssuer).filter(TrustedIssuer.issuer == payload.issuer).first():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='That issuer is already trusted')
+        row = TrustedIssuer(
+            issuer=payload.issuer, jwks_url=payload.jwks_url, subject_claim=payload.subject_claim,
+            allowed_client_ids=json.dumps(payload.allowed_client_ids) if payload.allowed_client_ids else None,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return TrustedIssuerInfo(
+            issuer=row.issuer, jwks_url=row.jwks_url, subject_claim=row.subject_claim,
+            allowed_client_ids=payload.allowed_client_ids, created_at=row.created_at,
+        )
+
+
+@router.delete("/trusted-issuers/{issuer:path}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_trusted_issuer(issuer: str, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can remove a trusted issuer')
+    with SessionLocal() as db:
+        row = db.query(TrustedIssuer).filter(TrustedIssuer.issuer == issuer).first()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Trusted issuer not found')
+        db.delete(row)
+        db.commit()
 
 
 

@@ -1,0 +1,4 @@
+# Dev-only: not part of the app image, just for running tests/ locally
+# against the live docker-compose stack. pip install -r requirements-dev.txt
+pytest>=8.0.0
+requests>=2.31.0
