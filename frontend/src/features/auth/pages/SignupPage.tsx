@@ -25,8 +25,10 @@ export function SignupPage() {
   async function onSubmit(values: SignupValues) {
     setFormError(null)
     try {
-      await usersApi.signup(values.username, values.email, values.password)
-      await login(values.username, values.password)
+      // Username is generated server-side from the email - login accepts
+      // either, so logging back in with the email is enough afterwards.
+      await usersApi.signup(values.email, values.password)
+      await login(values.email, values.password)
       navigate('/')
     } catch (error) {
       setFormError(error instanceof ApiError ? error.detail : 'Signup failed')
@@ -36,16 +38,12 @@ export function SignupPage() {
   return (
     <AuthLayout title="Create an account">
       <form className="space-y-3" onSubmit={handleSubmit(onSubmit)}>
-        <Input placeholder="Username" {...register('username')} error={errors.username?.message} />
         <Input
           type="email"
           placeholder="Email"
           {...register('email')}
           error={errors.email?.message}
         />
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Used for your profile picture (via Gravatar) - not shown to other users.
-        </p>
         <Input
           type="password"
           placeholder="Password"

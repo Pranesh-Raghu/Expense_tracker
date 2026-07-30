@@ -4,8 +4,10 @@ from typing import Optional
 from avatar import gravatar_url
 
 
+# No `username` here on purpose: signup only collects email + password,
+# and the username is generated server-side from the email's local part
+# (see User.generate_username_from_email in models/user_model.py).
 class UserCreate(BaseModel):
-    username: str
     email: EmailStr
     password: str
 

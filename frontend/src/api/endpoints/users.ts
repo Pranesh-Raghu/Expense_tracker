@@ -1,8 +1,12 @@
 import { apiFetch } from '../client'
 import type { User, UserUpdateInput } from '../types'
 
-export function signup(username: string, email: string, password: string): Promise<User> {
-  return apiFetch<User>('/users/', { method: 'POST', body: { username, email, password } })
+// No username param - it's generated server-side from the email's local
+// part; the returned User has the generated username, needed to log in
+// right after (the REST login endpoint takes username, not email... though
+// it now also accepts email directly, see auth.py).
+export function signup(email: string, password: string): Promise<User> {
+  return apiFetch<User>('/users/', { method: 'POST', body: { email, password } })
 }
 
 // Requires auth; used to populate the "share with" user picker and the

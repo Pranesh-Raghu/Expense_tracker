@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import Column, Integer, String,Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from database import Base, SessionLocal
@@ -20,15 +22,33 @@ class User(Base):
     
     # Data Access Object (DAO) Methods
     @staticmethod
+    def generate_username_from_email(email: str, db) -> str:
+        """Derives a unique username from the email's local part (before
+        the @) - signup only collects email + password, so this is the
+        only source of the username. Strips characters the DB column
+        doesn't need to worry about; appends a numeric suffix on
+        collision."""
+        local_part = email.split('@', 1)[0].lower()
+        base = re.sub(r'[^a-z0-9_.-]', '', local_part) or 'user'
+
+        candidate = base
+        suffix = 2
+        while db.query(User).filter(User.username == candidate).first():
+            candidate = f"{base}{suffix}"
+            suffix += 1
+        return candidate
+
+    @staticmethod
     def create_user(user_credentials):
-        
+
         with SessionLocal() as db:
            last_user = db.query(User).order_by(User.id.desc()).first()
-           new_id = last_user.id + 1 if last_user else 1 
-            
+           new_id = last_user.id + 1 if last_user else 1
+
+           username = User.generate_username_from_email(user_credentials.email, db)
            hashed_password = pwd_context.hash(user_credentials.password)
            db_user = User(id = new_id,
-                          username = user_credentials.username,
+                          username = username,
                           email = user_credentials.email,
                           password = hashed_password,
                           )
@@ -93,10 +113,17 @@ class User(Base):
     
     
     @staticmethod
-    def authenticate_user(username: str, password: str):
+    def authenticate_user(identifier: str, password: str):
+        """`identifier` may be a username or an email - since signup only
+        ever shows the user their email (the username is generated and
+        never surfaced), login has to accept either."""
         with SessionLocal() as db:
-            user = db.query(User).filter(User.username == username).first()
-            
+            user = (
+                db.query(User)
+                .filter((User.username == identifier) | (User.email == identifier))
+                .first()
+            )
+
             if not user:
                 return False
             if not pwd_context.verify(password,user.password):

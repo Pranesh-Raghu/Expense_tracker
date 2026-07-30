@@ -39,7 +39,7 @@ export function LoginPage() {
       )}
 
       <form className="space-y-3" onSubmit={handleSubmit(onSubmit)}>
-        <Input placeholder="Username" {...register('username')} error={errors.username?.message} />
+        <Input placeholder="Email or username" {...register('username')} error={errors.username?.message} />
         <Input
           type="password"
           placeholder="Password"
