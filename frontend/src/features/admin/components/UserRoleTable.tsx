@@ -85,7 +85,7 @@ function UserCard({ user, isMe }: { user: User; isMe: boolean }) {
           onRevoke={(sessionId) => revokeSession.mutate(sessionId)}
           isRevoking={revokeSession.isPending}
           revokeError={revokeSession.error}
-          emptyDescription="This user has no active OAuth sessions."
+          emptyDescription="This user has no active sessions."
         />
       </div>
     </Card>

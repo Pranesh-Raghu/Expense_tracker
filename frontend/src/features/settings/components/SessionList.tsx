@@ -10,6 +10,13 @@ import { formatDateTime } from '@/lib/format'
 import { parseUserAgent } from '@/lib/userAgent'
 import { DeviceIcon } from './DeviceIcon'
 
+// Matches oauth/service.py's WEB_SESSION_CLIENT_ID - password/Google/
+// passwordless logins are recorded under this fixed client_id so they
+// share the same sessions list/revoke UI as real OAuth-client logins.
+function clientLabel(clientId: string): string {
+  return clientId === 'expense-tracker-web' ? 'This app (web)' : clientId
+}
+
 interface SessionListProps {
   sessions: SessionInfo[] | undefined
   isLoading: boolean
@@ -34,7 +41,7 @@ export function SessionList({
   if (isLoading) return <Spinner />
   if (isError) return <ErrorState message={error instanceof ApiError ? error.detail : 'Failed to load sessions'} />
   if (!sessions || sessions.length === 0) {
-    return <EmptyState title="No active OAuth sessions" description={emptyDescription} />
+    return <EmptyState title="No active sessions" description={emptyDescription} />
   }
 
   return (
@@ -52,7 +59,7 @@ export function SessionList({
                   {browser} on {os}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
-                  <Badge>{session.client_id}</Badge>
+                  <Badge>{clientLabel(session.client_id)}</Badge>
                   {session.city && <span>{session.city}</span>}
                   {session.ip_address && <span>{session.ip_address}</span>}
                 </div>

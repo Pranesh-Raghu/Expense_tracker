@@ -1,7 +1,7 @@
 import logging
 import os
 
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from datetime import datetime, timedelta, timezone
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -39,11 +39,21 @@ bcrypt_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl='auth/token')
 
 def create_access_token(username: str, user_id: int, expires_delta: timedelta):
-    encode = {'sub': username, 'id': user_id}
+    jti = secrets.token_urlsafe(16)
     expires = datetime.now(timezone.utc) + expires_delta
-    encode.update({'exp': expires})
-    return jwt.encode(encode, SECRET_KEY, algorithm = ALGORITHM)
+    encode = {'sub': username, 'id': user_id, 'jti': jti, 'exp': expires}
+    token = jwt.encode(encode, SECRET_KEY, algorithm = ALGORITHM)
+    return token, jti
 
+
+def _client_ip(request: Request) -> str | None:
+    # Behind ngrok/a reverse proxy, the real client IP is in
+    # X-Forwarded-For (first entry = original client) - same logic as
+    # oauth/router.py's version of this helper.
+    forwarded = request.headers.get('x-forwarded-for')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.client.host if request.client else None
 
 
 def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
@@ -63,9 +73,17 @@ def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get('sub', '')
         user_id: int = payload.get('id', 0)
+        jti: str | None = payload.get('jti')
 
         if username is None or user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Could not validate user')
+
+        # Makes "Revoke" on the Sessions & devices page actually invalidate
+        # this specific token, instead of only hiding it from the list -
+        # without this, a password/Google login's JWT would stay valid
+        # until its natural 100-minute expiry regardless of revocation.
+        if jti and oauth_service.is_web_session_revoked(jti):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Session has been revoked')
 
         return {'username': username, 'id': user_id}
 
@@ -75,8 +93,25 @@ def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
 
 user_dependency = Annotated[dict, Depends(get_current_user)]
 
+ACCESS_TOKEN_TTL = timedelta(minutes=100)
+
+
+def _issue_and_record(request: Request, user) -> str:
+    """Every REST/web login path (password, Google, passwordless) funnels
+    through here: mints the JWT and records it as a session (see
+    oauth_service.record_web_session) so it shows up in - and can actually
+    be killed from - the Sessions & devices page, not just the OAuth
+    authorization-code flow's own sessions."""
+    token, jti = create_access_token(user.username, user.id, ACCESS_TOKEN_TTL)
+    oauth_service.record_web_session(
+        user_id=user.id, jti=jti, ttl=ACCESS_TOKEN_TTL,
+        user_agent=request.headers.get('user-agent'), ip_address=_client_ip(request),
+    )
+    return token
+
+
 @router.post("/token", response_model=Token)
-async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,Depends()]):
+async def login_for_access_token(request: Request, form_data: Annotated[OAuth2PasswordRequestForm,Depends()]):
 
     user = User.authenticate_user(form_data.username, form_data.password)
 
@@ -87,7 +122,7 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
     logger.info("login: user_id=%s username=%s", user.id, user.username)
     webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
 
-    token = create_access_token(user.username, user.id, timedelta(minutes=100))
+    token = _issue_and_record(request, user)
 
     return  {'access_token':token, 'token_type':'bearer'}
 
@@ -99,7 +134,7 @@ def google_login():
 
 
 @router.get("/google/callback")
-def google_callback(code: str, state: str):
+def google_callback(request: Request, code: str, state: str):
     if not google_oauth.consume_state(state):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid or expired OAuth state')
 
@@ -118,7 +153,7 @@ def google_callback(code: str, state: str):
     logger.info("google login: user_id=%s username=%s", user.id, user.username)
     webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
 
-    token = create_access_token(user.username, user.id, timedelta(minutes=100))
+    token = _issue_and_record(request, user)
     # Not /auth/callback: /auth/* is reserved for the backend rewrite on
     # the frontend's static site (see the frontend router's own comment),
     # so a request there never reaches the SPA at all.
@@ -139,12 +174,12 @@ def request_passwordless_login(payload: PasswordlessRequestRequest):
 
 
 @router.post("/passwordless/verify", response_model=Token)
-def verify_passwordless_login(payload: PasswordlessVerifyRequest):
+def verify_passwordless_login(request: Request, payload: PasswordlessVerifyRequest):
     user_id = oauth_service.verify_passwordless_login(payload.token)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired login link')
     user = User.get_user(user_id)
-    access_token = create_access_token(user.username, user.id, timedelta(minutes=100))
+    access_token = _issue_and_record(request, user)
     return {'access_token': access_token, 'token_type': 'bearer'}
 
 

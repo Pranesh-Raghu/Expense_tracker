@@ -333,6 +333,48 @@ def revoke_refresh_token(refresh_token: str) -> None:
             logger.info("revoked refresh token: user_id=%s client_id=%s", record.user_id, record.client_id)
 
 
+# ---------------------------------------------------------------------------
+# Web sessions: the SPA's own logins (password or Google) issue a plain
+# HS256 JWT (see auth.py's create_access_token), not an OAuth refresh
+# token - but they're recorded here in the same RefreshToken table (under a
+# fixed client_id) purely so they show up in the same sessions list/revoke
+# UI as third-party OAuth-client logins, and so revoking one has real
+# teeth: auth.py's get_current_user checks is_web_session_revoked on every
+# request instead of trusting the JWT signature alone.
+# ---------------------------------------------------------------------------
+
+WEB_SESSION_CLIENT_ID = "expense-tracker-web"
+
+
+def record_web_session(*, user_id: int, jti: str, ttl: timedelta,
+                        user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> None:
+    now = _now()
+    with SessionLocal() as db:
+        db.add(RefreshToken(
+            token_hash=_hash_token(jti),
+            client_id=WEB_SESSION_CLIENT_ID,
+            user_id=user_id,
+            scope=None,
+            resource=None,
+            expires_at=now + ttl,
+            revoked=False,
+            user_agent=user_agent,
+            ip_address=ip_address,
+            created_at=now,
+            last_used_at=now,
+        ))
+        db.commit()
+
+
+def is_web_session_revoked(jti: str) -> bool:
+    with SessionLocal() as db:
+        record = db.query(RefreshToken).filter(RefreshToken.token_hash == _hash_token(jti)).first()
+        # No matching row (e.g. a token issued before this feature existed,
+        # or already past its expiry and pruned) is treated as not revoked -
+        # the JWT's own exp claim is still the source of truth for expiry.
+        return record is not None and record.revoked
+
+
 def revoke_access_token(access_token: str) -> None:
     try:
         claims = jwt.decode(access_token, keys.get_public_key_pem(), algorithms=[ALGORITHM], options={"verify_aud": False})

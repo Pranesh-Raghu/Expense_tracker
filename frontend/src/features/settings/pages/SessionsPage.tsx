@@ -20,9 +20,9 @@ export function SessionsPage() {
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Sessions & devices</h1>
       <p className="text-sm text-slate-500 dark:text-slate-400">
-        Devices currently signed in through an OAuth login (authorization-code flow, e.g. an MCP client or a
-        third-party app you approved). Signing in with just a username and password doesn't create a session
-        here - that flow issues a short-lived token with nothing to revoke early.
+        Every device you're signed into - whether through this app's own login (password, Google, or a magic
+        link) or through an OAuth client (e.g. an MCP client you approved). Revoking a session signs that
+        device out immediately, even before its token would naturally expire.
       </p>
 
       <SessionList
@@ -33,7 +33,7 @@ export function SessionsPage() {
         onRevoke={(sessionId) => revoke.mutate(sessionId)}
         isRevoking={revoke.isPending}
         revokeError={revoke.error}
-        emptyDescription="Sessions appear here after you log in through an OAuth client (see Admin → OAuth clients)."
+        emptyDescription="Sessions appear here after you log in."
       />
     </div>
   )
