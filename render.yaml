@@ -8,12 +8,7 @@
 # exists after its first deploy, so there's an unavoidable chicken-and-egg
 # step: deploy once, then come back and fill in the real URL.
 #
-# Also worth double-checking against Render's current Blueprint reference
-# (https://render.com/docs/blueprint-spec) before deploying: the shape here
-# is accurate as of writing, but a couple of details - especially how a
-# service attaches to an `envVarGroups` entry - weren't confirmed against a
-# full example in Render's own docs, so verify that section in the
-# dashboard once the blueprint is synced.
+# Validated with `render blueprints validate ./render.yaml` (CLI v2.22.0).
 
 envVarGroups:
   - name: expense-tracker-secrets
@@ -29,9 +24,8 @@ services:
     plan: starter
     dockerfilePath: ./mysql/Dockerfile
     dockerContext: .
-    envVarGroups:
-      - expense-tracker-secrets
     envVars:
+      - fromGroup: expense-tracker-secrets
       - key: MYSQL_DATABASE
         value: expensetracker
     disk:
@@ -45,9 +39,8 @@ services:
     runtime: docker
     dockerfilePath: ./openfga/Dockerfile
     dockerContext: ./openfga
-    envVarGroups:
-      - expense-tracker-secrets
     envVars:
+      - fromGroup: expense-tracker-secrets
       - key: MYSQL_HOST
         fromService:
           name: expense-tracker-db
@@ -64,10 +57,9 @@ services:
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
-    # These are just args to openfga/entrypoint.sh's `exec /openfga "$@"` -
-    # it composes OPENFGA_DATASTORE_URI from the env vars above before
-    # exec'ing, so this stays a plain migrate/run split either way.
-    preDeployCommand: migrate
+    # openfga/entrypoint.sh composes OPENFGA_DATASTORE_URI from the env vars
+    # above and runs migrate before exec'ing "run" - no preDeployCommand
+    # needed (it's also unsupported on Render's free plan).
     dockerCommand: run
 
   # --- FastAPI app (public web service) ---------------------------------
@@ -77,9 +69,8 @@ services:
     plan: starter
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    envVarGroups:
-      - expense-tracker-secrets
     envVars:
+      - fromGroup: expense-tracker-secrets
       - key: MYSQL_HOST
         fromService:
           name: expense-tracker-db

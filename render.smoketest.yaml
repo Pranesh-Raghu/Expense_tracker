@@ -1,0 +1,123 @@
+# Throwaway variant of render.yaml for validating the service wiring
+# (fromService references, envVarGroups, dockerCommand composition) on
+# Render's free plan, which doesn't require payment info on file. NOT for
+# real use: free plan has no persistent disk, so expense_tracker's MySQL
+# data is lost on every restart/redeploy. Delete this file (and the
+# services it created) once the smoke test confirms the wiring works, and
+# deploy render.yaml for anything real.
+
+envVarGroups:
+  - name: expense-tracker-secrets-smoketest
+    envVars:
+      - key: MYSQL_ROOT_PASSWORD
+        generateValue: true
+
+services:
+  - name: expense-tracker-db-smoketest
+    type: pserv
+    runtime: docker
+    plan: free
+    dockerfilePath: ./mysql/Dockerfile
+    dockerContext: .
+    envVars:
+      - fromGroup: expense-tracker-secrets-smoketest
+      - key: MYSQL_DATABASE
+        value: expensetracker
+
+  - name: expense-tracker-openfga-smoketest
+    type: pserv
+    runtime: docker
+    plan: free
+    dockerfilePath: ./openfga/Dockerfile
+    dockerContext: ./openfga
+    envVars:
+      - fromGroup: expense-tracker-secrets-smoketest
+      - key: MYSQL_HOST
+        fromService:
+          name: expense-tracker-db-smoketest
+          type: pserv
+          property: host
+      - key: MYSQL_PORT
+        fromService:
+          name: expense-tracker-db-smoketest
+          type: pserv
+          property: port
+      - key: OPENFGA_DATASTORE_ENGINE
+        value: mysql
+      - key: OPENFGA_PLAYGROUND_ENABLED
+        value: "false"
+      - key: OPENFGA_LOG_FORMAT
+        value: text
+    dockerCommand: run
+
+  - name: expense-tracker-app-smoketest
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - fromGroup: expense-tracker-secrets-smoketest
+      - key: MYSQL_HOST
+        fromService:
+          name: expense-tracker-db-smoketest
+          type: pserv
+          property: host
+      - key: MYSQL_PORT
+        fromService:
+          name: expense-tracker-db-smoketest
+          type: pserv
+          property: port
+      - key: OPENFGA_HOST
+        fromService:
+          name: expense-tracker-openfga-smoketest
+          type: pserv
+          property: host
+      - key: OPENFGA_PORT
+        fromService:
+          name: expense-tracker-openfga-smoketest
+          type: pserv
+          property: port
+      - key: FRONTEND_HOST
+        fromService:
+          name: expense-tracker-frontend-smoketest
+          type: web
+          property: host
+      - key: CIMD_ALLOW_INSECURE_HTTP
+        value: "false"
+      - key: INITIAL_ADMIN_USERNAMES
+        value: ""
+    dockerCommand: >-
+      sh -c 'export DATABASE_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}/expensetracker";
+      export OAUTH_ISSUER="${RENDER_EXTERNAL_URL}";
+      export OPENFGA_API_URL="http://${OPENFGA_HOST}:${OPENFGA_PORT}";
+      export CORS_ORIGINS="https://${FRONTEND_HOST}";
+      uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'
+
+  - name: expense-tracker-frontend-smoketest
+    type: web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      # TODO: same chicken-and-egg caveat as render.yaml - fill in the real
+      # app-smoketest hostname once it exists.
+      - source: /auth/*
+        destination: https://expense-tracker-app-smoketest.onrender.com/auth/*
+        type: rewrite
+      - source: /users/*
+        destination: https://expense-tracker-app-smoketest.onrender.com/users/*
+        type: rewrite
+      - source: /expenses/*
+        destination: https://expense-tracker-app-smoketest.onrender.com/expenses/*
+        type: rewrite
+      - source: /oauth/*
+        destination: https://expense-tracker-app-smoketest.onrender.com/oauth/*
+        type: rewrite
+      - source: /.well-known/*
+        destination: https://expense-tracker-app-smoketest.onrender.com/.well-known/*
+        type: rewrite
+      - source: /*
+        destination: /index.html
+        type: rewrite
