@@ -9,6 +9,7 @@ import { ApiError } from '@/api/errors'
 import { useAuth } from '@/auth/useAuth'
 import { loginSchema, type LoginValues } from '@/schemas/auth'
 import { AuthLayout } from '../components/AuthLayout'
+import { GoogleSignInButton } from '../components/GoogleSignInButton'
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -37,6 +38,14 @@ export function LoginPage() {
       {searchParams.get('reason') === 'expired' && (
         <p className="mb-3 text-xs text-amber-600 dark:text-amber-400">Your session expired. Log in again.</p>
       )}
+
+      <GoogleSignInButton />
+
+      <div className="my-4 flex items-center gap-3">
+        <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+        <span className="text-xs text-slate-400">or</span>
+        <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+      </div>
 
       <form className="space-y-3" onSubmit={handleSubmit(onSubmit)}>
         <Input placeholder="Email or username" {...register('username')} error={errors.username?.message} />

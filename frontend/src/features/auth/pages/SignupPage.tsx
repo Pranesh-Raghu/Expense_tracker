@@ -10,6 +10,7 @@ import { useAuth } from '@/auth/useAuth'
 import * as usersApi from '@/api/endpoints/users'
 import { signupSchema, type SignupValues } from '@/schemas/auth'
 import { AuthLayout } from '../components/AuthLayout'
+import { GoogleSignInButton } from '../components/GoogleSignInButton'
 
 export function SignupPage() {
   const { login } = useAuth()
@@ -37,6 +38,14 @@ export function SignupPage() {
 
   return (
     <AuthLayout title="Create an account">
+      <GoogleSignInButton />
+
+      <div className="my-4 flex items-center gap-3">
+        <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+        <span className="text-xs text-slate-400">or</span>
+        <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+      </div>
+
       <form className="space-y-3" onSubmit={handleSubmit(onSubmit)}>
         <Input
           type="email"

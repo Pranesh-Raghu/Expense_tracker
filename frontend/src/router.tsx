@@ -6,6 +6,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/features/auth/pages/LoginPage'
 import { SignupPage } from '@/features/auth/pages/SignupPage'
 import { ApiKeyLoginPage } from '@/features/auth/pages/ApiKeyLoginPage'
+import { AuthCallbackPage } from '@/features/auth/pages/AuthCallbackPage'
 import { DashboardPage } from '@/features/expenses/pages/DashboardPage'
 import { ExpenseDetailPage } from '@/features/expenses/pages/ExpenseDetailPage'
 import { ReportsPage } from '@/features/reports/pages/ReportsPage'
@@ -26,6 +27,11 @@ export const router = createBrowserRouter([
       { path: '/login', element: <LoginPage /> },
       { path: '/signup', element: <SignupPage /> },
       { path: '/login/api-key', element: <ApiKeyLoginPage /> },
+      // Not /auth/callback: /auth/* is reserved for the backend rewrite
+      // (see vite.config.ts / the static site's routes) - that prefix
+      // never reaches the SPA at all, so a route there would 404 against
+      // the API instead of rendering this page.
+      { path: '/login/callback', element: <AuthCallbackPage /> },
       {
         path: '/',
         element: (

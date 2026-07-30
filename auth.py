@@ -2,6 +2,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi.responses import RedirectResponse
 from datetime import datetime, timedelta, timezone
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
@@ -17,6 +18,7 @@ from oauth.schemas import (
     PasswordlessRequestRequest, PasswordlessRequestResponse, PasswordlessVerifyRequest,
 )
 from authz import service as authz
+import google_oauth
 import webhooks
 import json
 import secrets
@@ -88,6 +90,36 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
     token = create_access_token(user.username, user.id, timedelta(minutes=100))
 
     return  {'access_token':token, 'token_type':'bearer'}
+
+
+@router.get("/google/login")
+def google_login():
+    url, _state = google_oauth.build_authorize_url()
+    return RedirectResponse(url)
+
+
+@router.get("/google/callback")
+def google_callback(code: str, state: str):
+    if not google_oauth.consume_state(state):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid or expired OAuth state')
+
+    try:
+        google_access_token = google_oauth.exchange_code_for_access_token(code)
+        userinfo = google_oauth.fetch_userinfo(google_access_token)
+    except Exception:
+        logger.exception("google oauth exchange failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail='Google sign-in failed')
+
+    email = userinfo.get('email')
+    if not email or not userinfo.get('email_verified'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Google account has no verified email')
+
+    user = User.find_or_create_by_email(email)
+    logger.info("google login: user_id=%s username=%s", user.id, user.username)
+    webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
+
+    token = create_access_token(user.username, user.id, timedelta(minutes=100))
+    return RedirectResponse(f"{google_oauth.FRONTEND_URL}/auth/callback?token={token}")
 
 
 @router.post("/passwordless/request", response_model=PasswordlessRequestResponse)

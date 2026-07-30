@@ -70,6 +70,16 @@ services:
         value: "false"
       - key: INITIAL_ADMIN_USERNAMES
         value: ""
+      - key: FRONTEND_URL
+        value: https://expense-tracker-frontend-smoketest.onrender.com
+      # sync: false - set the real values in this service's dashboard
+      # Environment tab, not here. Google OAuth client credentials, so they
+      # don't belong in git even in a throwaway smoke-test blueprint. See
+      # google_oauth.py and .env.example for the redirect URI to register.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
     # docker-entrypoint.sh (baked into the image) composes DATABASE_URL and
     # OAUTH_ISSUER; OPENFGA_API_URL/CORS_ORIGINS are set directly above so
     # its fallback composition for those two doesn't kick in.

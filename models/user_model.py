@@ -1,4 +1,5 @@
 import re
+import secrets
 
 from sqlalchemy import Column, Integer, String,Boolean
 from sqlalchemy.orm import Mapped, mapped_column
@@ -56,6 +57,33 @@ class User(Base):
            db.commit()
            db.refresh(db_user)
            return db_user
+
+    @staticmethod
+    def find_or_create_by_email(email: str):
+        """For Google sign-in: matches an existing account by email
+        (auto-linking a Google login to a password-based account with the
+        same address), or creates a new one if none exists. Google-created
+        accounts get a random, never-shown password - they're not meant to
+        ever log in with a password, just to satisfy the NOT NULL column."""
+        with SessionLocal() as db:
+            existing = db.query(User).filter(User.email == email).first()
+            if existing:
+                return existing
+
+            last_user = db.query(User).order_by(User.id.desc()).first()
+            new_id = last_user.id + 1 if last_user else 1
+
+            username = User.generate_username_from_email(email, db)
+            db_user = User(
+                id=new_id,
+                username=username,
+                email=email,
+                password=pwd_context.hash(secrets.token_urlsafe(32)),
+            )
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
+            return db_user
 
     @staticmethod
     def get_users():

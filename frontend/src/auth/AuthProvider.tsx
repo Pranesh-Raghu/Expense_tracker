@@ -19,6 +19,7 @@ interface AuthContextValue {
   expiryWarning: boolean
   login: (username: string, password: string) => Promise<void>
   loginWithApiKey: (key: string) => Promise<void>
+  loginWithToken: (jwt: string) => Promise<void>
   logout: () => void
   refreshUser: () => Promise<void>
 }
@@ -96,6 +97,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [refreshMe, scheduleExpiryTimers],
   )
 
+  // For Google sign-in: the backend already did the OAuth exchange and
+  // minted a normal JWT (see auth.py's /auth/google/callback), which lands
+  // here as a query param on /auth/callback - same token shape as
+  // login(), just skipping the password round-trip.
+  const loginWithToken = useCallback(
+    async (jwt: string) => {
+      setToken({ token: jwt, kind: 'jwt' })
+      setKind('jwt')
+      scheduleExpiryTimers(jwt)
+      await refreshMe()
+    },
+    [refreshMe, scheduleExpiryTimers],
+  )
+
   const loginWithApiKey = useCallback(
     async (key: string) => {
       if (!key.startsWith(API_KEY_PREFIX)) {
@@ -159,10 +174,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       expiryWarning,
       login,
       loginWithApiKey,
+      loginWithToken,
       logout,
       refreshUser: refreshMe,
     }),
-    [user, kind, isBootstrapping, expiryWarning, login, loginWithApiKey, logout, refreshMe],
+    [user, kind, isBootstrapping, expiryWarning, login, loginWithApiKey, loginWithToken, logout, refreshMe],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

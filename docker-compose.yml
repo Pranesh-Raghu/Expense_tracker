@@ -61,6 +61,9 @@ services:
       OPENFGA_API_URL: http://openfga:8080
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       INITIAL_ADMIN_USERNAMES: ${INITIAL_ADMIN_USERNAMES:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
     volumes:
       - oauth_keys:/app/keys
 
