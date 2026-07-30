@@ -129,7 +129,7 @@ services:
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
-    staticPublishPath: frontend/dist
+    staticPublishPath: dist
     routes:
       # API rewrites must come before the SPA catch-all - Render evaluates
       # routes in order. Same origin as the frontend, so no CORS round-trip

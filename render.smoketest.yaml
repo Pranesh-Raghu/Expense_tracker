@@ -83,7 +83,7 @@ services:
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
-    staticPublishPath: frontend/dist
+    staticPublishPath: dist
     routes:
       # TODO: fill in the real app-smoketest hostname once it exists -
       # Render assigns it on first deploy, so this can't be known upfront.
