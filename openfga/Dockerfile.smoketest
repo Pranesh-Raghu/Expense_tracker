@@ -10,9 +10,14 @@
 # `openfga migrate` can run once at BUILD time using exec-form RUN, baking
 # an already-migrated sqlite file into the image. No shell needed anywhere,
 # and no Render preDeployCommand/Jobs (paid-only) needed either.
+# /home/nonroot, not /tmp: Render (and many PaaS sandboxes) mount a fresh
+# ephemeral tmpfs over /tmp at container start, wiping anything baked there
+# at build time - that's why /healthz went back to NOT_SERVING even though
+# the image built and ran correctly. /home/nonroot is OpenFGA's own
+# documented sqlite example path and isn't remounted.
 FROM openfga/openfga:latest
 ENV OPENFGA_DATASTORE_ENGINE=sqlite
-ENV OPENFGA_DATASTORE_URI=file:/tmp/openfga.db
-RUN ["/openfga", "migrate", "--datastore-engine", "sqlite", "--datastore-uri", "file:/tmp/openfga.db"]
+ENV OPENFGA_DATASTORE_URI=file:/home/nonroot/openfga.db
+RUN ["/openfga", "migrate", "--datastore-engine", "sqlite", "--datastore-uri", "file:/home/nonroot/openfga.db"]
 ENTRYPOINT ["/openfga"]
 CMD ["run"]
