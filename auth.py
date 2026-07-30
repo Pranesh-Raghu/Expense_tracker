@@ -119,7 +119,10 @@ def google_callback(code: str, state: str):
     webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
 
     token = create_access_token(user.username, user.id, timedelta(minutes=100))
-    return RedirectResponse(f"{google_oauth.FRONTEND_URL}/auth/callback?token={token}")
+    # Not /auth/callback: /auth/* is reserved for the backend rewrite on
+    # the frontend's static site (see the frontend router's own comment),
+    # so a request there never reaches the SPA at all.
+    return RedirectResponse(f"{google_oauth.FRONTEND_URL}/login/callback?token={token}")
 
 
 @router.post("/passwordless/request", response_model=PasswordlessRequestResponse)
