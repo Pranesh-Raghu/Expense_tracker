@@ -1,4 +1,4 @@
-# Expense Tracker
+# Pennywise
 
 A FastAPI expense tracker with a full OAuth 2.1 authorization server (Dynamic
 Client Registration, Client ID Metadata Documents, Cross-App Access),

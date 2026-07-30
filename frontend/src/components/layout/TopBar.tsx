@@ -20,8 +20,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
           </svg>
         </button>
         <span className="text-sm font-semibold">
-          <span className="text-brand-600 dark:text-brand-500">E</span>xpense{' '}
-          <span className="text-brand-600 dark:text-brand-500">T</span>racker
+          Penny<span className="text-brand-600 dark:text-brand-500">wise</span>
         </span>
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
