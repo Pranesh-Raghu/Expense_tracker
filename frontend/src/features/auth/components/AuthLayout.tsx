@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Card } from '@/components/ui/Card'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { PennywiseIcon } from '@/components/ui/PennywiseIcon'
 
 export function AuthLayout({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -9,7 +10,10 @@ export function AuthLayout({ title, children }: { title: string; children: React
         <ThemeToggle />
       </div>
       <Card className="w-full max-w-sm">
-        <h1 className="mb-4 text-lg font-semibold">{title}</h1>
+        <div className="mb-4 flex items-center gap-2">
+          <PennywiseIcon size={28} />
+          <h1 className="text-lg font-semibold">{title}</h1>
+        </div>
         {children}
       </Card>
     </div>

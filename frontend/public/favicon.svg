@@ -1,0 +1,13 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- Two cash bills peeking out behind the coin, slightly fanned -->
+  <rect x="4" y="19" width="36" height="21" rx="3" fill="#16a34a" stroke="#14532d" stroke-width="1.5" transform="rotate(-14 22 30)" />
+  <rect x="24" y="21" width="36" height="21" rx="3" fill="#22c55e" stroke="#14532d" stroke-width="1.5" transform="rotate(11 42 32)" />
+
+  <!-- The coin itself, front and center -->
+  <circle cx="32" cy="33" r="19" fill="#f5c518" stroke="#8a6d1a" stroke-width="2.5" />
+
+  <!-- Sly, wise face: one relaxed eye, one raised/squinted eyebrow (a wink), subtle smirk -->
+  <circle cx="25" cy="31" r="2.2" fill="#5c4413" />
+  <path d="M34.5 28.5 q3.5 -3 7 0" stroke="#5c4413" stroke-width="2.2" fill="none" stroke-linecap="round" />
+  <path d="M23 39 q9 6 17 -1" stroke="#5c4413" stroke-width="2.4" fill="none" stroke-linecap="round" />
+</svg>

@@ -1,6 +1,7 @@
 import { useAuth } from '@/auth/useAuth'
 import { Badge } from '@/components/ui/Badge'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { PennywiseIcon } from '@/components/ui/PennywiseIcon'
 import { AccountMenu } from './AccountMenu'
 
 export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
@@ -19,6 +20,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
             <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
+        <PennywiseIcon size={26} />
         <span className="text-sm font-semibold">
           Penny<span className="text-brand-600 dark:text-brand-500">wise</span>
         </span>
