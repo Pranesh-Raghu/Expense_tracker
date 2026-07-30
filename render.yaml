@@ -100,15 +100,12 @@ services:
         value: "false"
       - key: INITIAL_ADMIN_USERNAMES
         value: ""
-    # DATABASE_URL, OAUTH_ISSUER, OPENFGA_API_URL, and CORS_ORIGINS are all
-    # composed strings built from the discrete values above (plus Render's
-    # own RENDER_EXTERNAL_URL) - same reasoning as the openfga service.
-    dockerCommand: >-
-      sh -c 'export DATABASE_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}/expensetracker";
-      export OAUTH_ISSUER="${RENDER_EXTERNAL_URL}";
-      export OPENFGA_API_URL="http://${OPENFGA_HOST}:${OPENFGA_PORT}";
-      export CORS_ORIGINS="https://${FRONTEND_HOST}";
-      uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'
+    # docker-entrypoint.sh (baked into the image) composes DATABASE_URL,
+    # OAUTH_ISSUER, OPENFGA_API_URL, and CORS_ORIGINS from the discrete
+    # values above before exec'ing uvicorn - no dockerCommand override
+    # needed. (An earlier version tried inlining this as a `dockerCommand:
+    # sh -c '...'` string, but Render wraps dockerCommand in its own shell
+    # invocation and the embedded quotes collided with it.)
 
   # --- Frontend (static site, proxies API paths to the app) -------------
   - name: expense-tracker-frontend

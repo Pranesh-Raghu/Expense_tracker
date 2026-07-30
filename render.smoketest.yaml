@@ -58,12 +58,9 @@ services:
         value: "false"
       - key: INITIAL_ADMIN_USERNAMES
         value: ""
-    dockerCommand: >-
-      sh -c 'export DATABASE_URL="sqlite:////tmp/expensetracker.db";
-      export OAUTH_ISSUER="${RENDER_EXTERNAL_URL}";
-      export OPENFGA_API_URL="http://${OPENFGA_HOST}:${OPENFGA_PORT}";
-      export CORS_ORIGINS="https://${FRONTEND_HOST}";
-      uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'
+    # docker-entrypoint.sh (baked into the image) composes DATABASE_URL,
+    # OAUTH_ISSUER, OPENFGA_API_URL, and CORS_ORIGINS from the env vars
+    # above - see render.yaml for why this isn't a dockerCommand override.
 
   - name: expense-tracker-frontend-smoketest
     type: web
