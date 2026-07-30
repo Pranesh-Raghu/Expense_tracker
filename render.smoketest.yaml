@@ -39,28 +39,29 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
-      - key: OPENFGA_HOST
-        fromService:
-          name: expense-tracker-openfga-smoketest
-          type: web
-          property: host
-      - key: OPENFGA_PORT
-        fromService:
-          name: expense-tracker-openfga-smoketest
-          type: web
-          property: port
-      - key: FRONTEND_HOST
-        fromService:
-          name: expense-tracker-frontend-smoketest
-          type: web
-          property: host
+      # Render forces `type: web` services onto internal port 10000, which
+      # is on Render's own blocked-ports list for private-network traffic
+      # (https://render.com/docs/private-network) - so fromService
+      # host/port doesn't actually work here the way it does for pserv in
+      # render.yaml. Talk to openfga-smoketest over its public HTTPS URL
+      # instead (fine functionally, just not private-network-only like a
+      # real deployment). Same reasoning for CORS_ORIGINS below: the
+      # `host` property is the *private* hostname (no .onrender.com
+      # suffix), which won't match the browser's real Origin header.
+      #
+      # TODO: same chicken-and-egg caveat as the frontend's routes below -
+      # these are only knowable after each service's first deploy.
+      - key: OPENFGA_API_URL
+        value: https://expense-tracker-openfga-smoketest.onrender.com
+      - key: CORS_ORIGINS
+        value: https://expense-tracker-frontend-smoketest.onrender.com
       - key: CIMD_ALLOW_INSECURE_HTTP
         value: "false"
       - key: INITIAL_ADMIN_USERNAMES
         value: ""
-    # docker-entrypoint.sh (baked into the image) composes DATABASE_URL,
-    # OAUTH_ISSUER, OPENFGA_API_URL, and CORS_ORIGINS from the env vars
-    # above - see render.yaml for why this isn't a dockerCommand override.
+    # docker-entrypoint.sh (baked into the image) composes DATABASE_URL and
+    # OAUTH_ISSUER; OPENFGA_API_URL/CORS_ORIGINS are set directly above so
+    # its fallback composition for those two doesn't kick in.
 
   - name: expense-tracker-frontend-smoketest
     type: web
