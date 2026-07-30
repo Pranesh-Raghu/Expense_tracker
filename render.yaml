@@ -71,6 +71,8 @@ services:
         value: mysql
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
+      - key: OPENFGA_METRICS_ENABLED
+        value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
     # Explicit binary path in both - see render.smoketest.yaml for why

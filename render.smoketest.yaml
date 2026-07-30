@@ -32,6 +32,8 @@ services:
     envVars:
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
+      - key: OPENFGA_METRICS_ENABLED
+        value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
     # Explicit binary path: dockerCommand appears to replace the image's
