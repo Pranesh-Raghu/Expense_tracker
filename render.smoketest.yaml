@@ -1,49 +1,31 @@
 # Throwaway variant of render.yaml for validating the service wiring
-# (fromService references, envVarGroups, dockerCommand composition) on
-# Render's free plan, which doesn't require payment info on file. NOT for
-# real use: free plan has no persistent disk, so expense_tracker's MySQL
-# data is lost on every restart/redeploy. Delete this file (and the
-# services it created) once the smoke test confirms the wiring works, and
-# deploy render.yaml for anything real.
-
-envVarGroups:
-  - name: expense-tracker-secrets-smoketest
-    envVars:
-      - key: MYSQL_ROOT_PASSWORD
-        generateValue: true
+# (fromService references, dockerCommand composition, static-site rewrites)
+# on Render's free plan, with NO payment info required at all: unlike the
+# first version of this file, there's no MySQL/OpenFGA private service -
+# Render's free plan doesn't have private services (pserv) at any price
+# point, only `web` services and static sites. So openfga runs as a plain
+# (public) web service on SQLite, and the app also runs on SQLite instead
+# of MySQL.
+#
+# NOT for real use: SQLite here lives on the container's ephemeral disk, so
+# both the app's data and OpenFGA's authorization tuples are wiped on every
+# restart/redeploy, and OpenFGA is reachable on the public internet instead
+# of Render's private network. Delete this file (and the services it
+# created) once the smoke test confirms the wiring works, and deploy
+# render.yaml for anything real.
 
 services:
-  - name: expense-tracker-db-smoketest
-    type: pserv
-    runtime: docker
-    plan: free
-    dockerfilePath: ./mysql/Dockerfile
-    dockerContext: .
-    envVars:
-      - fromGroup: expense-tracker-secrets-smoketest
-      - key: MYSQL_DATABASE
-        value: expensetracker
-
   - name: expense-tracker-openfga-smoketest
-    type: pserv
+    type: web
     runtime: docker
     plan: free
     dockerfilePath: ./openfga/Dockerfile
     dockerContext: ./openfga
     envVars:
-      - fromGroup: expense-tracker-secrets-smoketest
-      - key: MYSQL_HOST
-        fromService:
-          name: expense-tracker-db-smoketest
-          type: pserv
-          property: host
-      - key: MYSQL_PORT
-        fromService:
-          name: expense-tracker-db-smoketest
-          type: pserv
-          property: port
       - key: OPENFGA_DATASTORE_ENGINE
-        value: mysql
+        value: sqlite
+      - key: OPENFGA_DATASTORE_URI
+        value: file:/tmp/openfga.db
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
       - key: OPENFGA_LOG_FORMAT
@@ -57,26 +39,15 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
-      - fromGroup: expense-tracker-secrets-smoketest
-      - key: MYSQL_HOST
-        fromService:
-          name: expense-tracker-db-smoketest
-          type: pserv
-          property: host
-      - key: MYSQL_PORT
-        fromService:
-          name: expense-tracker-db-smoketest
-          type: pserv
-          property: port
       - key: OPENFGA_HOST
         fromService:
           name: expense-tracker-openfga-smoketest
-          type: pserv
+          type: web
           property: host
       - key: OPENFGA_PORT
         fromService:
           name: expense-tracker-openfga-smoketest
-          type: pserv
+          type: web
           property: port
       - key: FRONTEND_HOST
         fromService:
@@ -88,7 +59,7 @@ services:
       - key: INITIAL_ADMIN_USERNAMES
         value: ""
     dockerCommand: >-
-      sh -c 'export DATABASE_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}/expensetracker";
+      sh -c 'export DATABASE_URL="sqlite:////tmp/expensetracker.db";
       export OAUTH_ISSUER="${RENDER_EXTERNAL_URL}";
       export OPENFGA_API_URL="http://${OPENFGA_HOST}:${OPENFGA_PORT}";
       export CORS_ORIGINS="https://${FRONTEND_HOST}";
@@ -101,8 +72,8 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: frontend/dist
     routes:
-      # TODO: same chicken-and-egg caveat as render.yaml - fill in the real
-      # app-smoketest hostname once it exists.
+      # TODO: fill in the real app-smoketest hostname once it exists -
+      # Render assigns it on first deploy, so this can't be known upfront.
       - source: /auth/*
         destination: https://expense-tracker-app-smoketest.onrender.com/auth/*
         type: rewrite
