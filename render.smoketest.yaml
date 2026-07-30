@@ -1,47 +1,48 @@
-# Throwaway variant of render.yaml for validating the service wiring
-# (fromService references, dockerCommand composition, static-site rewrites)
-# on Render's free plan, with NO payment info required at all: unlike the
-# first version of this file, there's no MySQL/OpenFGA private service -
-# Render's free plan doesn't have private services (pserv) at any price
-# point, only `web` services and static sites. So openfga runs as a plain
-# (public) web service on SQLite, and the app also runs on SQLite instead
-# of MySQL.
+# Variant of render.yaml that avoids Render's payment-info gate entirely:
+# no MySQL/OpenFGA private service (pserv requires payment info at any
+# price point on Render), and no persistent disk (free-plan services don't
+# support disks at all - `disks are not supported for free tier services`,
+# confirmed via `render blueprints validate`).
 #
-# NOT for real use: SQLite here lives on the container's ephemeral disk, so
-# both the app's data and OpenFGA's authorization tuples are wiped on every
-# restart/redeploy, and OpenFGA is reachable on the public internet instead
-# of Render's private network. Delete this file (and the services it
-# created) once the smoke test confirms the wiring works, and deploy
-# render.yaml for anything real.
+# Both the app and OpenFGA instead point at a free external Postgres
+# (e.g. https://neon.tech - no card required) for real persistence across
+# redeploys. openfga runs as a plain (public) `type: web` service rather
+# than a private one, so it's reachable over the public internet instead
+# of Render's private network - a real (if minor) security difference
+# from render.yaml, acceptable for a smoke test but not for production.
+#
+# TODO before this actually persists anything: sign up for a free Postgres
+# (Neon, Supabase, etc.), then in each service's dashboard Environment
+# tab set:
+#   - expense-tracker-app-smoketest: DATABASE_URL to that Postgres URI
+#   - expense-tracker-openfga-smoketest: OPENFGA_DATASTORE_URI to the
+#     SAME Postgres URI (OpenFGA creates its own tables - `store`,
+#     `tuple`, etc. - that won't collide with the app's `users`,
+#     `expenses`, etc., so one database can serve both)
 
 services:
-  # openfga/Dockerfile.smoketest, not a plain image: openfga/openfga is a
-  # shell-less/distroless-style image (no /bin/sh), so a normal shell-form
-  # RUN/entrypoint script fails ("exec: /bin/sh: no such file"). That
-  # Dockerfile instead uses exec-form RUN (RUN ["cmd", "arg"], no shell
-  # involved) to run `openfga migrate` once at BUILD time, baking an
-  # already-migrated sqlite file into the image - avoiding both the shell
-  # problem and Render's paid-only preDeployCommand/Jobs features. Verified
-  # locally: `docker build` + `docker run` + `curl .../healthz` -> SERVING.
   - name: expense-tracker-openfga-smoketest
     type: web
     runtime: docker
     plan: free
-    dockerfilePath: ./openfga/Dockerfile.smoketest
+    dockerfilePath: ./openfga/Dockerfile
     dockerContext: ./openfga
     envVars:
+      - key: OPENFGA_DATASTORE_ENGINE
+        value: postgres
+      # sync: false - paste the real Postgres connection string in this
+      # service's dashboard Environment tab, not here (it's a credential).
+      - key: OPENFGA_DATASTORE_URI
+        sync: false
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
       - key: OPENFGA_METRICS_ENABLED
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
-    # Explicit binary path: dockerCommand appears to replace the image's
-    # own ENTRYPOINT rather than just override CMD the way docker-compose's
-    # `command:` does - `dockerCommand: run` alone tries to exec a program
-    # literally named "run", which fails silently (exit 128, no output)
-    # before the Go binary can even log its startup banner.
-    dockerCommand: /openfga run
+    # openfga/Dockerfile's baked-in CMD composes a MySQL DSN only when
+    # MYSQL_HOST is set (render.yaml's case) - here it isn't, so the
+    # engine/URI above are used as-is, then `migrate && exec run`.
 
   - name: expense-tracker-app-smoketest
     type: web
@@ -50,6 +51,10 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
+      # sync: false - paste the same Postgres connection string here too
+      # (see the TODO above).
+      - key: DATABASE_URL
+        sync: false
       # Render forces `type: web` services onto internal port 10000, which
       # is on Render's own blocked-ports list for private-network traffic
       # (https://render.com/docs/private-network) - so fromService
@@ -80,9 +85,10 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-    # docker-entrypoint.sh (baked into the image) composes DATABASE_URL and
-    # OAUTH_ISSUER; OPENFGA_API_URL/CORS_ORIGINS are set directly above so
-    # its fallback composition for those two doesn't kick in.
+    # docker-entrypoint.sh (baked into the image) only falls back to
+    # sqlite/composes from MYSQL_* when DATABASE_URL isn't already set -
+    # since it's set directly above (once you fill in the real value),
+    # that fallback never triggers here.
 
   - name: expense-tracker-frontend-smoketest
     type: web

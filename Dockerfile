@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir --upgrade pip \
         "sqlalchemy>=2.0.38" \
         "sqlmodel>=0.0.24" \
         "pymysql>=1.1.0" \
+        "psycopg2-binary>=2.9.9" \
         "python-jose[cryptography]>=3.3.0" \
         "passlib[bcrypt]>=1.7.4" \
         "bcrypt==4.0.1" \

@@ -35,24 +35,17 @@ services:
 
   # --- OpenFGA (private service, no public port) -----------------------
   #
-  # Plain prebuilt image: openfga/openfga is a shell-less/distroless-style
-  # image (no /bin/sh), so a custom Dockerfile wrapping it in a shell
-  # entrypoint script - which is what would normally compose
-  # OPENFGA_DATASTORE_URI from the discrete MYSQL_* values below - fails at
-  # build time ("exec: /bin/sh: no such file"), and the script's #!/bin/sh
-  # shebang couldn't run even if it built.
-  #
-  # TODO: because of that, OPENFGA_DATASTORE_URI below is a placeholder.
-  # After the first deploy, open expense-tracker-db in the dashboard to
-  # read its actual host/port, open the expense-tracker-secrets env group
-  # to read the generated MYSQL_ROOT_PASSWORD, and set this service's real
-  # OPENFGA_DATASTORE_URI directly in the dashboard to:
-  #   root:<MYSQL_ROOT_PASSWORD>@tcp(<db host>:<db port>)/openfga?parseTime=true
+  # openfga/Dockerfile composes OPENFGA_DATASTORE_URI itself at container
+  # start from MYSQL_HOST/MYSQL_PORT/MYSQL_ROOT_PASSWORD below (via a
+  # busybox shell copied into the otherwise shell-less openfga/openfga
+  # image - see that Dockerfile's comments) and runs `migrate` on every
+  # boot before `run`, so there's no manual dashboard step needed here
+  # and no preDeployCommand/dockerCommand override either.
   - name: expense-tracker-openfga
     type: pserv
-    runtime: image
-    image:
-      url: docker.io/openfga/openfga:latest
+    runtime: docker
+    dockerfilePath: ./openfga/Dockerfile
+    dockerContext: ./openfga
     envVars:
       - fromGroup: expense-tracker-secrets
       - key: MYSQL_HOST
@@ -65,20 +58,12 @@ services:
           name: expense-tracker-db
           type: pserv
           property: port
-      - key: OPENFGA_DATASTORE_URI
-        value: "root:CHANGE_ME@tcp(CHANGE_ME:3306)/openfga?parseTime=true"
-      - key: OPENFGA_DATASTORE_ENGINE
-        value: mysql
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
       - key: OPENFGA_METRICS_ENABLED
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
-    # Explicit binary path in both - see render.smoketest.yaml for why
-    # (dockerCommand appears to replace ENTRYPOINT, not just CMD).
-    preDeployCommand: /openfga migrate
-    dockerCommand: /openfga run
 
   # --- FastAPI app (public web service) ---------------------------------
   - name: expense-tracker-app
