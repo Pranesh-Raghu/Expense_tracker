@@ -34,17 +34,26 @@ def bootstrap() -> tuple[str, str]:
 
     # The app container can start before the openfga container has finished
     # migrating/booting - retry rather than crashing the whole app on a
-    # transient connection failure during startup.
+    # transient connection failure during startup. On Render's free tier
+    # specifically, an idle service spins all the way down (not just
+    # "asleep" - the container is torn down), so waking it can take well
+    # over 30s; the old 15-attempt/2s budget (30s total) wasn't enough and
+    # crash-looped the app whenever OpenFGA happened to be cold. 40
+    # attempts/3s (120s) comfortably outlasts that.
     last_error = None
-    for attempt in range(15):
+    for attempt in range(40):
         try:
-            with _client() as client:
+            # Longer timeout than _client()'s usual 5s: while cold, OpenFGA
+            # may accept the connection but respond slowly rather than
+            # refusing outright, and 5s isn't always enough to tell the
+            # difference from a real hang.
+            with httpx.Client(base_url=OPENFGA_API_URL, timeout=10.0) as client:
                 client.get("/healthz").raise_for_status()
             last_error = None
             break
         except httpx.HTTPError as exc:
             last_error = exc
-            time.sleep(2)
+            time.sleep(3)
     if last_error:
         raise RuntimeError(f"OpenFGA not reachable at {OPENFGA_API_URL} after retries") from last_error
 
