@@ -15,31 +15,25 @@
 # render.yaml for anything real.
 
 services:
-  # Plain prebuilt image, not the openfga/Dockerfile wrapper render.yaml
-  # uses: openfga/openfga is a shell-less/distroless-style image (no
-  # /bin/sh), so a custom Dockerfile that COPYs + chmods + execs a shell
-  # script fails at build time ("exec: /bin/sh: no such file"), and even
-  # if it built, the script's #!/bin/sh shebang could never run anyway.
-  # SQLite needs no MySQL-DSN composition, so there's nothing to wrap here.
+  # openfga/Dockerfile.smoketest, not a plain image: openfga/openfga is a
+  # shell-less/distroless-style image (no /bin/sh), so a normal shell-form
+  # RUN/entrypoint script fails ("exec: /bin/sh: no such file"). That
+  # Dockerfile instead uses exec-form RUN (RUN ["cmd", "arg"], no shell
+  # involved) to run `openfga migrate` once at BUILD time, baking an
+  # already-migrated sqlite file into the image - avoiding both the shell
+  # problem and Render's paid-only preDeployCommand/Jobs features. Verified
+  # locally: `docker build` + `docker run` + `curl .../healthz` -> SERVING.
   - name: expense-tracker-openfga-smoketest
     type: web
-    runtime: image
+    runtime: docker
     plan: free
-    image:
-      url: docker.io/openfga/openfga:latest
+    dockerfilePath: ./openfga/Dockerfile.smoketest
+    dockerContext: ./openfga
     envVars:
-      - key: OPENFGA_DATASTORE_ENGINE
-        value: sqlite
-      - key: OPENFGA_DATASTORE_URI
-        value: file:/tmp/openfga.db
       - key: OPENFGA_PLAYGROUND_ENABLED
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
-    # No preDeployCommand (unsupported on free plan) - run
-    # `render jobs create <this-service-id> --start-command migrate` once
-    # by hand after the first deploy instead.
-    #
     # Explicit binary path: dockerCommand appears to replace the image's
     # own ENTRYPOINT rather than just override CMD the way docker-compose's
     # `command:` does - `dockerCommand: run` alone tries to exec a program

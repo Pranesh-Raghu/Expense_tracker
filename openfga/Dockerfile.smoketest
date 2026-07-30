@@ -1,0 +1,18 @@
+# Only for render.smoketest.yaml's free-tier setup. openfga/openfga is a
+# shell-less/distroless-style image (no /bin/sh, no coreutils) - a normal
+# shell-form RUN (implicitly "/bin/sh -c ...") fails at build time, and a
+# #!/bin/sh entrypoint script could never execute at runtime either.
+#
+# Docker's RUN also has an exec form - RUN ["executable", "arg", ...] -
+# which calls exec() directly with no shell involved. Since sqlite's
+# OPENFGA_DATASTORE_URI here is a static literal (no per-deploy MYSQL_HOST/
+# PORT/PASSWORD composition needed, unlike render.yaml's real MySQL setup),
+# `openfga migrate` can run once at BUILD time using exec-form RUN, baking
+# an already-migrated sqlite file into the image. No shell needed anywhere,
+# and no Render preDeployCommand/Jobs (paid-only) needed either.
+FROM openfga/openfga:latest
+ENV OPENFGA_DATASTORE_ENGINE=sqlite
+ENV OPENFGA_DATASTORE_URI=file:/tmp/openfga.db
+RUN ["/openfga", "migrate", "--datastore-engine", "sqlite", "--datastore-uri", "file:/tmp/openfga.db"]
+ENTRYPOINT ["/openfga"]
+CMD ["run"]
