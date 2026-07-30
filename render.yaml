@@ -73,8 +73,10 @@ services:
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
-    preDeployCommand: migrate
-    dockerCommand: run
+    # Explicit binary path in both - see render.smoketest.yaml for why
+    # (dockerCommand appears to replace ENTRYPOINT, not just CMD).
+    preDeployCommand: /openfga migrate
+    dockerCommand: /openfga run
 
   # --- FastAPI app (public web service) ---------------------------------
   - name: expense-tracker-app

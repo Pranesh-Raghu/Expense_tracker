@@ -39,7 +39,13 @@ services:
     # No preDeployCommand (unsupported on free plan) - run
     # `render jobs create <this-service-id> --start-command migrate` once
     # by hand after the first deploy instead.
-    dockerCommand: run
+    #
+    # Explicit binary path: dockerCommand appears to replace the image's
+    # own ENTRYPOINT rather than just override CMD the way docker-compose's
+    # `command:` does - `dockerCommand: run` alone tries to exec a program
+    # literally named "run", which fails silently (exit 128, no output)
+    # before the Go binary can even log its startup banner.
+    dockerCommand: /openfga run
 
   - name: expense-tracker-app-smoketest
     type: web
