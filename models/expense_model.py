@@ -19,15 +19,25 @@ class Expense(Base):
     @staticmethod
     def get_expenses(user:user_dependency):
         with SessionLocal() as db:
-            
-            return db.query(Expense).filter(Expense.user_id == user.get('id')).all() 
-    
+
+            return db.query(Expense).filter(Expense.user_id == user.get('id')).all()
+
+    @staticmethod
+    def get_expenses_by_ids(expense_ids: list[int]):
+        """Fetch a specific set of expenses by id, in whatever order the DB
+        returns them - callers that need permission-scoped access (owner,
+        shared, or admin) compute the allowed id set via authz first."""
+        if not expense_ids:
+            return []
+        with SessionLocal() as db:
+            return db.query(Expense).filter(Expense.id.in_(expense_ids)).all()
+
     @staticmethod
     def get_expense_by_id(user: user_dependency,expense_id: int):
         with SessionLocal() as db:
-             
+
             expense = db.query(Expense).filter(Expense.id == expense_id).first()
-            
+
             return expense
     
     @staticmethod
@@ -54,9 +64,13 @@ class Expense(Base):
     
     @staticmethod
     def update_expense(user: user_dependency,expense_id:int,expense_data:dict):
+        # No user_id filter here on purpose: an editor (via sharing) or an
+        # org admin may update an expense they don't own. Whether the
+        # calling user is actually allowed to is checked by authz in
+        # services/expense_services.py before this is ever called.
         with SessionLocal() as db:
-            expense = db.query(Expense).filter(Expense.id == expense_id).filter(Expense.user_id == user.get('id')).first()
-            
+            expense = db.query(Expense).filter(Expense.id == expense_id).first()
+
             if not expense:
                 return None
             

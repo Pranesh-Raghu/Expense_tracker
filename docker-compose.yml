@@ -7,11 +7,41 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-expensetracker}
     volumes:
       - db_data:/var/lib/mysql
+      # Auto-creates the separate `openfga` database on first boot, in the
+      # same MySQL instance the app already uses - one less service to run.
+      - ./mysql-init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-expensetracker}"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  openfga-migrate:
+    image: openfga/openfga:latest
+    command: migrate
+    restart: "no"
+    environment:
+      OPENFGA_DATASTORE_ENGINE: mysql
+      OPENFGA_DATASTORE_URI: root:${MYSQL_ROOT_PASSWORD:-expensetracker}@tcp(db:3306)/openfga?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+
+  openfga:
+    image: openfga/openfga:latest
+    command: run
+    restart: unless-stopped
+    environment:
+      OPENFGA_DATASTORE_ENGINE: mysql
+      OPENFGA_DATASTORE_URI: root:${MYSQL_ROOT_PASSWORD:-expensetracker}@tcp(db:3306)/openfga?parseTime=true
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_LOG_FORMAT: text
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8080" # HTTP API - 8080 avoided since it'd be confusing next to the app's 8000
+      - "8082:8081" # gRPC API (unused here, exposed for debugging)
 
   app:
     build: .
@@ -19,6 +49,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      openfga:
+        condition: service_started
     ports:
       - "8000:8000"
     environment:
@@ -26,6 +58,8 @@ services:
       OAUTH_ISSUER: ${OAUTH_ISSUER:-http://localhost:8000}
       MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-}
       CIMD_ALLOW_INSECURE_HTTP: ${CIMD_ALLOW_INSECURE_HTTP:-false}
+      OPENFGA_API_URL: http://openfga:8080
+      INITIAL_ADMIN_USERNAMES: ${INITIAL_ADMIN_USERNAMES:-}
     volumes:
       - oauth_keys:/app/keys
 

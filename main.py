@@ -8,12 +8,29 @@ import os
 
 from oauth.router import router as oauth_router
 from mcp_server import build_mcp_asgi_app
+from authz import client as authz_client
+from authz import service as authz_service
+from models.user_model import User
 
 # Import so their SQLAlchemy models register on Base before create_all runs.
 import oauth.models  # noqa: F401
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Idempotent: finds-or-creates the OpenFGA store/model. Safe to call on
+# every startup, including against data left over from a previous run.
+authz_client.bootstrap()
+
+# Optional one-time bootstrap for the very first admin: there's no other way
+# to become admin, since granting admin requires already being one. Set
+# INITIAL_ADMIN_USERNAMES=alice,bob in the environment to promote existing
+# users on startup - a no-op for usernames that don't exist yet or are
+# already admins.
+for _username in filter(None, os.environ.get("INITIAL_ADMIN_USERNAMES", "").split(",")):
+    _user = next((u for u in User.get_users() if u.username == _username.strip()), None)
+    if _user:
+        authz_service.grant_admin(_user.id)
 
 # Built before the FastAPI app so its lifespan (needed by FastMCP's session
 # manager) can be passed in at construction time.

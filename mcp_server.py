@@ -14,6 +14,7 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.auth import RemoteAuthProvider
 from fastmcp.server.dependencies import get_access_token
 
+from authz import service as authz
 from oauth import service
 from oauth.token_verifier import HybridTokenVerifier
 from schemas.expense_schemas import ExpenseCreate, ExpenseResponse, ExpenseUpdate
@@ -86,6 +87,28 @@ def delete_expense(expense_id: int) -> dict:
     """Delete an expense by id."""
     user = _current_user()
     return _serialize(expense_services.delete_expense(user, expense_id))
+
+
+@mcp.tool()
+def share_expense(expense_id: int, target_user_id: int, relation: str) -> dict:
+    """Share an expense with another user. relation must be "viewer" (read-only)
+    or "editor" (can also update it). Only the owner, or an org admin, can share."""
+    user = _current_user()
+    return expense_services.share_expense(user, expense_id, target_user_id, relation)
+
+
+@mcp.tool()
+def unshare_expense(expense_id: int, target_user_id: int) -> dict:
+    """Remove another user's shared access (viewer or editor) to an expense."""
+    user = _current_user()
+    return expense_services.unshare_expense(user, expense_id, target_user_id)
+
+
+@mcp.tool()
+def my_permissions() -> dict:
+    """Report whether the current user has the org admin role."""
+    user = _current_user()
+    return {"user_id": user["id"], "username": user["username"], "is_admin": authz.is_admin(user["id"])}
 
 
 @mcp.tool()

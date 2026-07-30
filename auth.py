@@ -10,6 +10,7 @@ from models.user_model import User
 from schemas.user_schemas import Token
 from oauth import service as oauth_service
 from oauth.schemas import ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo
+from authz import service as authz
 
 router = APIRouter()
 
@@ -87,6 +88,25 @@ def list_api_keys(user: user_dependency):
 def revoke_api_key(key_id: str, user: user_dependency):
     if not oauth_service.revoke_api_key(user_id=user['id'], key_id=key_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='API key not found')
+
+
+@router.get("/me")
+def get_my_permissions(user: user_dependency):
+    return {'username': user['username'], 'id': user['id'], 'is_admin': authz.is_admin(user['id'])}
+
+
+@router.post("/admin/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def grant_admin(target_user_id: int, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an existing admin can grant admin')
+    authz.grant_admin(target_user_id)
+
+
+@router.delete("/admin/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_admin(target_user_id: int, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an existing admin can revoke admin')
+    authz.revoke_admin(target_user_id)
 
 
 

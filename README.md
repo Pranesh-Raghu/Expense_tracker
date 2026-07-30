@@ -1,8 +1,10 @@
 # Expense Tracker
 
 A FastAPI expense tracker with a full OAuth 2.1 authorization server (Dynamic
-Client Registration + Client ID Metadata Documents), static API keys, and an
-MCP server exposing the same expense data as tools for AI agents.
+Client Registration + Client ID Metadata Documents), static API keys, an MCP
+server exposing the same expense data as tools for AI agents, and RBAC +
+fine-grained authorization (OpenFGA) governing who can see, edit, delete, or
+share which expenses.
 
 ## Contents
 
@@ -19,10 +21,12 @@ MCP server exposing the same expense data as tools for AI agents.
   - [Dynamic Client Registration (DCR)](#dynamic-client-registration-dcr)
   - [Client ID Metadata Documents (CIMD)](#client-id-metadata-documents-cimd)
   - [API keys](#api-keys)
+- [Authorization: RBAC + fine-grained access (OpenFGA)](#authorization-rbac--fine-grained-access-openfga)
 - [MCP server](#mcp-server)
 - [REST API reference](#rest-api-reference)
 - [Database schema](#database-schema)
 - [Testing the OAuth + MCP flow end to end](#testing-the-oauth--mcp-flow-end-to-end)
+- [Testing RBAC + sharing end to end](#testing-rbac--sharing-end-to-end)
 - [Project structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Security notes](#security-notes)
@@ -45,6 +49,10 @@ a small FastAPI REST API. On top of that base, it implements:
   where an interactive OAuth redirect isn't practical.
 - **An MCP server** (`mcp_server.py`, built on [FastMCP](https://gofastmcp.com))
   exposing the expense data as tools, protected by either credential type.
+- **RBAC + fine-grained authorization** (`authz/`, backed by
+  [OpenFGA](https://openfga.dev)) - an org-wide `admin` role (RBAC) plus
+  per-expense `viewer`/`editor` sharing (FGA), enforced identically whether
+  the request comes through the REST API or an MCP tool call.
 
 ## Architecture
 
@@ -68,13 +76,13 @@ a small FastAPI REST API. On top of that base, it implements:
                  │  /mcp                FastMCP (RS256 JWT or    │
                  │  /.well-known/oauth-protected-resource/mcp    │
                  │                       API key, RFC 9728)      │
-                 └───────────────────────┬───────────────────────┘
-                                          │
-                                    SQLAlchemy ORM
-                                          │
-                                     ┌────▼────┐
-                                     │  MySQL  │
-                                     └─────────┘
+                 └──────┬─────────────────────────┬──────────────┘
+                        │                         │
+                  SQLAlchemy ORM             authz/ (sync httpx)
+                        │                         │
+                   ┌────▼────┐              ┌─────▼──────┐
+                   │  MySQL  │◀─────────────│  OpenFGA   │
+                   └─────────┘  (its own db) └────────────┘
 ```
 
 Two separate token systems exist side by side:
@@ -88,6 +96,12 @@ Two separate token systems exist side by side:
 
 Both the REST API and the MCP server also accept a **static API key**
 (`eak_...`) as an alternative to either token type.
+
+Authentication (who are you?) and authorization (what can you do?) are
+deliberately separate concerns here: whichever of the three credential types
+above gets you in the door, every actual permission decision - view, edit,
+delete, share an expense - goes through the same `authz/` module, backed by
+OpenFGA, regardless of REST or MCP.
 
 ## Prerequisites
 
@@ -104,11 +118,19 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-This starts two containers:
+This starts four containers:
 
-- `db` - MySQL 8, with a persisted volume (`db_data`)
+- `db` - MySQL 8, with a persisted volume (`db_data`). Also hosts a second
+  database (`openfga`), auto-created on first boot via `mysql-init/`.
+- `openfga-migrate` - runs once, sets up OpenFGA's schema in that `openfga`
+  database, then exits (this is expected - `docker compose ps` will show it
+  as `Exited`, not a failure).
+- `openfga` - the OpenFGA server (`localhost:8081`), storing the
+  authorization model and every RBAC/sharing relationship.
 - `app` - the FastAPI app on `http://localhost:8000`, with a persisted
-  volume (`oauth_keys`) for the RSA signing key so tokens survive restarts
+  volume (`oauth_keys`) for the RSA signing key so tokens survive restarts.
+  On startup it idempotently bootstraps the OpenFGA store + authorization
+  model (safe to restart repeatedly).
 
 Check it's up:
 
@@ -138,6 +160,8 @@ Compose (see `.env.example`):
 | `CIMD_ALLOW_INSECURE_HTTP` | `false` | Allows `http://` (instead of `https://`) Client ID Metadata Document URLs. **Local testing only - never enable in a real deployment.** |
 | `REST_JWT_SECRET_KEY` | dev placeholder | HMAC secret for the REST API's own login tokens (`/auth/token`). Set a real secret outside local dev. |
 | `SQL_ECHO` | `false` | Set `true` to log all SQL statements. |
+| `OPENFGA_API_URL` | `http://openfga:8080` | Where the app reaches OpenFGA. Set by `docker-compose.yml` directly (internal Docker network address) - not normally something you need to change. |
+| `INITIAL_ADMIN_USERNAMES` | *(empty)* | Comma-separated usernames to grant the `admin` role on startup. **The only way to create the first admin** - granting admin via `POST /auth/admin/{id}` requires already being one. No-op for usernames that don't exist yet; safe to leave set across restarts. |
 
 `OAUTH_ISSUER` matters more than it looks: every access token's audience
 check, every metadata document's URLs, and every CIMD self-certification
@@ -163,7 +187,18 @@ uvicorn main:app --reload
 
 You need a MySQL instance reachable at `DATABASE_URL` yourself (Docker
 Compose provides one automatically; without Docker, run one locally or
-point at any MySQL-compatible server).
+point at any MySQL-compatible server). You also need an OpenFGA instance
+reachable at `OPENFGA_API_URL` (defaults to `http://localhost:8081` outside
+Docker) - the quickest way is still via Docker even if the app itself runs
+bare:
+
+```bash
+docker run -p 8081:8080 -p 8082:8081 openfga/openfga run --datastore-engine memory
+```
+
+(`memory` here means the authorization model/tuples don't survive a
+restart - fine for local dev without Docker Compose, not for anything you
+want to persist.)
 
 `bcrypt==4.0.1` is pinned deliberately - `passlib` 1.7.4's internal bcrypt
 self-test breaks against `bcrypt`'s 4.1+ API changes and raises `ValueError:
@@ -326,6 +361,82 @@ hash is stored. Use it directly as a Bearer token:
 curl http://localhost:8000/expenses/ -H "Authorization: Bearer eak_..."
 ```
 
+## Authorization: RBAC + fine-grained access (OpenFGA)
+
+Authentication (the sections above) answers "who are you?" Authorization -
+"what can you actually do?" - is a completely separate layer, backed by
+[OpenFGA](https://openfga.dev), a Zanzibar-style relationship-based
+authorization system. All logic lives in `authz/`; nothing else in the app
+talks to OpenFGA directly.
+
+**Two kinds of access, on top of each other:**
+
+- **RBAC (a role):** every user is a member of one fixed organization
+  (`organization:main` - this app has no multi-tenancy concept, so a single
+  org is enough to get a real admin role). An **admin** can view, edit,
+  delete, and share *any* expense, without owning it or being shared on it.
+- **FGA (a per-resource grant):** independent of role, the owner of a
+  specific expense can share that one expense with one other specific user,
+  as a **viewer** (read-only) or **editor** (can also update it).
+
+Every permission check resolves to one of four **computed relations** on an
+expense - `can_view`, `can_edit`, `can_delete`, `can_share` - each a union of
+"you own it," "you were granted this relation," or "you're an org admin."
+`authz/model.py` has the full model; the shape is:
+
+```
+organization:main
+  admin:  [user, user, ...]           <- the RBAC role
+  member: admin ∪ (direct members)
+
+expense:<id>
+  parent_org: organization:main
+  owner:      [user]                  <- set once, at creation
+  viewer:     [user, user, ...]       <- set via sharing
+  editor:     [user, user, ...]       <- set via sharing
+  can_view:   viewer ∪ owner ∪ editor ∪ (admin of parent_org)
+  can_edit:   owner ∪ editor ∪ (admin of parent_org)
+  can_delete: owner ∪ (admin of parent_org)
+  can_share:  owner ∪ (admin of parent_org)
+```
+
+**Enforcement points** (`services/expense_services.py`): every expense
+operation calls the matching `authz.can_*` check and raises `403` if it
+fails, before touching the database. Creating an expense writes an `owner` +
+`parent_org` tuple; deleting one removes every tuple referencing it (no
+orphaned permissions left behind). Listing expenses (`GET /expenses/`) uses
+OpenFGA's `ListObjects` to compute the exact set of visible expense ids -
+own, shared, or admin-visible - then fetches only those rows.
+
+This is enforced identically for MCP tool calls (`mcp_server.py`) - they
+call the exact same `expense_services.*` functions, so an agent acting via
+MCP is bound by the same rules as a human via REST. `share_expense`,
+`unshare_expense`, and `my_permissions` are available as MCP tools too.
+
+**Managing roles and sharing:**
+
+```bash
+# who am I, and am I an admin?
+curl http://localhost:8000/auth/me -H "Authorization: Bearer $TOKEN"
+
+# grant/revoke admin (caller must already be admin)
+curl -X POST   http://localhost:8000/auth/admin/<user_id> -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -X DELETE http://localhost:8000/auth/admin/<user_id> -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# share/unshare a specific expense (caller must own it, or be admin)
+curl -X POST http://localhost:8000/expenses/<expense_id>/share \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"target_user_id": 5, "relation": "viewer"}'   # or "editor"
+
+curl -X DELETE http://localhost:8000/expenses/<expense_id>/share/<target_user_id> \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**The first admin** has to come from somewhere other than the endpoint
+above (granting admin requires already being one) - set
+`INITIAL_ADMIN_USERNAMES=<username>` in `.env` and restart the `app`
+container; see [Configuration](#configuration).
+
 ## MCP server
 
 Built on [FastMCP](https://gofastmcp.com), mounted at `/mcp`
@@ -345,20 +456,26 @@ automatically (RFC 9728).
 
 | Tool | Description |
 |---|---|
-| `list_expenses` | List every expense for the current user |
-| `get_expense(expense_id)` | Get a single expense |
-| `add_expense(amount, category, transaction)` | Record a new expense |
-| `update_expense(expense_id, ...)` | Update fields on an existing expense |
-| `delete_expense(expense_id)` | Delete an expense |
+| `list_expenses` | List every expense the current user can view - own, shared, or admin-visible |
+| `get_expense(expense_id)` | Get a single expense (requires `can_view`) |
+| `add_expense(amount, category, transaction)` | Record a new expense (you become its owner) |
+| `update_expense(expense_id, ...)` | Update fields on an existing expense (requires `can_edit`) |
+| `delete_expense(expense_id)` | Delete an expense (requires `can_delete`) |
+| `share_expense(expense_id, target_user_id, relation)` | Share an expense as `"viewer"` or `"editor"` (requires `can_share`) |
+| `unshare_expense(expense_id, target_user_id)` | Remove another user's shared access |
+| `my_permissions` | Report whether the current user has the org admin role |
 | `list_categories` | Valid expense categories |
 | `list_transaction_types` | Valid transaction types |
-| `monthly_report(year, month)` | All expenses in a month |
-| `monthly_total(year, month)` | Total amount for a month |
-| `yearly_report(year)` | All expenses in a year |
-| `yearly_total(year)` | Total amount for a year |
+| `monthly_report(year, month)` | All of *your own* expenses in a month |
+| `monthly_total(year, month)` | Total amount for a month (your own only) |
+| `yearly_report(year)` | All of *your own* expenses in a year |
+| `yearly_total(year)` | Total amount for a year (your own only) |
 
 (The REST API additionally exposes daily/weekly reports - a representative
-subset was chosen for MCP tools rather than a 1:1 mirror.)
+subset was chosen for MCP tools rather than a 1:1 mirror. The report/total
+tools are intentionally **not** RBAC/FGA-aware - they remain self-only,
+unlike the CRUD tools above; see
+[Authorization](#authorization-rbac--fine-grained-access-openfga).)
 
 ## REST API reference
 
@@ -374,7 +491,12 @@ subset was chosen for MCP tools rather than a 1:1 mirror.)
 | `POST` | `/auth/api-keys` | Bearer | Create an API key |
 | `GET` | `/auth/api-keys` | Bearer | List your API keys |
 | `DELETE` | `/auth/api-keys/{key_id}` | Bearer | Revoke an API key |
-| `GET` `POST` `PUT` `DELETE` | `/expenses/...` | Bearer | Full expense CRUD + category/transaction/report filters |
+| `GET` | `/auth/me` | Bearer | Current user + `is_admin` |
+| `POST` | `/auth/admin/{user_id}` | Bearer (admin) | Grant the admin role |
+| `DELETE` | `/auth/admin/{user_id}` | Bearer (admin) | Revoke the admin role |
+| `GET` `POST` `PUT` `DELETE` | `/expenses/...` | Bearer | Full expense CRUD (authz-checked) + category/transaction/report filters |
+| `POST` | `/expenses/{id}/share` | Bearer (owner/admin) | Share an expense as viewer/editor |
+| `DELETE` | `/expenses/{id}/share/{user_id}` | Bearer (owner/admin) | Remove a user's shared access |
 
 Interactive docs: `http://localhost:8000/docs`.
 
@@ -418,6 +540,31 @@ Interactive docs: `http://localhost:8000/docs`.
 Access tokens themselves are **not** stored - they're self-contained,
 RS256-signed JWTs, verified against the public key in
 `/.well-known/jwks.json` plus the revocation table above.
+
+### OpenFGA (its own MySQL database, not the `expensetracker` one)
+
+RBAC roles and expense sharing live entirely in OpenFGA's own `openfga`
+database (auto-created in the same MySQL container, see
+`mysql-init/01-create-openfga-db.sql`) - **not** as columns/tables in
+`expensetracker`. There is no `role` column on `users` and no
+`expense_shares` table; every permission fact is a relationship tuple:
+
+| Tuple shape | Meaning |
+|---|---|
+| `user:<id> admin organization:main` | that user has the RBAC admin role |
+| `user:<id> owner expense:<id>` | written automatically when an expense is created |
+| `organization:main parent_org expense:<id>` | written automatically when an expense is created - links it to the org for the admin-role check |
+| `user:<id> viewer expense:<id>` | written by `POST /expenses/{id}/share` with `"relation": "viewer"` |
+| `user:<id> editor expense:<id>` | same, with `"relation": "editor"` |
+
+Inspect them directly against OpenFGA's own API (`localhost:8081`, no auth
+by default - **don't expose this port outside local dev**):
+
+```bash
+STORE_ID=$(curl -s http://localhost:8081/stores | python3 -c "import sys,json;print(json.load(sys.stdin)['stores'][0]['id'])")
+curl -X POST http://localhost:8081/stores/$STORE_ID/read -H 'Content-Type: application/json' \
+  -d '{"tuple_key": {"object": "expense:1"}}'
+```
 
 ## Testing the OAuth + MCP flow end to end
 
@@ -469,6 +616,54 @@ use that URL as `client_id` in steps 4-5 instead of a DCR-issued one (set
 To test **API keys** instead of the OAuth dance: skip straight to step 6,
 using an `eak_...` key (see [API keys](#api-keys)) as the Bearer token.
 
+## Testing RBAC + sharing end to end
+
+Needs three users and a REST session token each (`POST /auth/token`) -
+substitute your own usernames/passwords:
+
+```bash
+# 1. create three users, get a token for each
+for u in owner_user other_user admin_user; do
+  curl -X POST http://localhost:8000/users/ -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$u\",\"password\":\"password123\"}"
+done
+
+OWNER_TOKEN=$(curl -s -X POST http://localhost:8000/auth/token -d username=owner_user -d password=password123 | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+OTHER_TOKEN=$(curl -s -X POST http://localhost:8000/auth/token -d username=other_user -d password=password123 | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+# 2. owner_user creates an expense
+EXPENSE=$(curl -s -X POST http://localhost:8000/expenses/ -H "Authorization: Bearer $OWNER_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"amount": 50, "category": "FOOD", "transaction": "DEBIT", "user_id": 0}')
+EXPENSE_ID=$(echo "$EXPENSE" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+# 3. other_user has zero access - confirm the 403
+curl -i http://localhost:8000/expenses/$EXPENSE_ID -H "Authorization: Bearer $OTHER_TOKEN"
+
+# 4. owner_user shares it as viewer
+curl -X POST http://localhost:8000/expenses/$EXPENSE_ID/share -H "Authorization: Bearer $OWNER_TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"target_user_id\": <other_user's id>, \"relation\": \"viewer\"}"
+
+# 5. other_user can now view it, but still can't edit or delete it
+curl http://localhost:8000/expenses/$EXPENSE_ID -H "Authorization: Bearer $OTHER_TOKEN"
+curl -i -X DELETE http://localhost:8000/expenses/$EXPENSE_ID -H "Authorization: Bearer $OTHER_TOKEN"   # -> 403
+
+# 6. promote admin_user to admin (requires an existing admin - use
+#    INITIAL_ADMIN_USERNAMES for the very first one) and confirm they can act
+#    on owner_user's expense despite no ownership or share at all
+ADMIN_TOKEN=$(curl -s -X POST http://localhost:8000/auth/token -d username=admin_user -d password=password123 | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+curl http://localhost:8000/expenses/$EXPENSE_ID -H "Authorization: Bearer $ADMIN_TOKEN"           # -> 200
+curl -X DELETE http://localhost:8000/expenses/$EXPENSE_ID -H "Authorization: Bearer $ADMIN_TOKEN"  # -> 200
+```
+
+To confirm cleanup worked, read the expense's tuples from OpenFGA directly
+(see [OpenFGA](#openfga-its-own-mysql-database-not-the-expensetracker-one))
+- after step 6's delete, it should return an empty tuple list.
+
+The same sequence works identically through MCP tools
+(`share_expense`/`unshare_expense`/`get_expense`/`delete_expense`) instead
+of the REST endpoints above - swap the REST calls for
+`tools/call` with the matching tool name and arguments.
+
 ## Project structure
 
 ```
@@ -497,13 +692,20 @@ Expense_tracker/
 │   ├── keys.py                        # RSA signing key generation/persistence, JWKS
 │   └── token_verifier.py               # HybridTokenVerifier (OAuth JWT or API key) for FastMCP
 │
+├── authz/                      # RBAC + fine-grained authorization (OpenFGA)
+│   ├── model.py                 # the authorization model (types/relations), as JSON
+│   ├── client.py                  # sync OpenFGA HTTP client + idempotent store/model bootstrap
+│   └── service.py                  # can_view/can_edit/can_delete/can_share, sharing, admin role management
+│
 ├── templates/
 │   ├── home.html                # REST API landing page
 │   └── login.html                # OAuth authorize login + consent screen
 ├── static/                     # CSS/JS for the templates
 │
+├── mysql-init/                 # SQL run once on a FRESH MySQL volume only
+│   └── 01-create-openfga-db.sql  # creates the separate `openfga` database
 ├── Dockerfile                  # app image
-├── docker-compose.yml           # app + MySQL, with persisted volumes
+├── docker-compose.yml           # app + MySQL + OpenFGA, with persisted volumes
 ├── .env.example                  # documented environment variables
 └── keys/                          # persisted RSA signing key (docker volume, gitignored)
 ```
@@ -553,6 +755,53 @@ under one issuer value will fail `aud`/`iss` validation after you change
 `OAUTH_ISSUER` and restart - log in again to get fresh tokens.
 </details>
 
+<details>
+<summary><code>Error: failed to initialize database connection: Unknown database 'openfga'</code></summary>
+
+`mysql-init/*.sql` only runs on a **fresh** MySQL data volume (first-ever
+container start) - if you already had a `db_data` volume from before adding
+OpenFGA, the init script never fires. Create the database manually once:
+
+```bash
+docker exec expense_tracker-db-1 mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS openfga;"
+docker compose up -d openfga-migrate openfga
+```
+</details>
+
+<details>
+<summary>OpenFGA writes/deletes fail with "tuple to be written already existed" or "did not exist"</summary>
+
+OpenFGA has no upsert - writing a tuple that's already there, or deleting
+one that isn't, both return `400 write_failed_due_to_invalid_input`. Every
+write/delete in `authz/service.py` reads current state first (`can_*`
+checks or `read_tuples`) and only sends the writes/deletes actually needed -
+follow that pattern for anything new (see `share_expense`'s viewer↔editor
+swap logic for the trickiest case).
+</details>
+
+<details>
+<summary>A env var change in <code>.env</code> doesn't seem to take effect after <code>docker compose up -d</code></summary>
+
+Two separate ways this bites: (1) the variable was added to `.env.example`
+but never actually referenced in `docker-compose.yml`'s `environment:`
+block for that service - compose does not auto-forward every `.env` key
+into a container, only ones explicitly listed with `${VAR}`. (2) even with
+it referenced, `docker compose up -d` alone sometimes doesn't detect an
+env-only change as needing a recreate. `docker compose up -d --force-recreate <service>`
+fixes case 2; `docker exec <container> env | grep VAR` confirms whether
+either happened at all.
+</details>
+
+<details>
+<summary>Partial update wipes out other fields to <code>NULL</code> (e.g. updating only <code>amount</code> also clears <code>category</code>)</summary>
+
+Pydantic's `.model_dump()` includes every field, `None` or not - a downstream
+`if 'category' in expense_data:` check (in `models/expense_model.py`) is
+then always true regardless of whether the caller actually provided it. Use
+`.model_dump(exclude_none=True)` when only present fields should be applied
+(fixed in `services/expense_services.py:update_expense`).
+</details>
+
 ## Security notes
 
 This is a reference implementation for learning/demoing the MCP
@@ -570,3 +819,13 @@ consider:
   this is SSRF-shaped by design (that's inherent to CIMD, not a bug), so if
   you deploy this somewhere with internal network access, make sure
   outbound requests from the app can't reach internal-only services
+- **OpenFGA's HTTP API (`localhost:8081`) has authentication disabled** -
+  anyone who can reach that port can read or write any permission tuple
+  directly, bypassing the app entirely. Fine for local dev; never expose
+  that port beyond the Docker network in a real deployment (enable OpenFGA's
+  own auth, or simply don't publish the port)
+- The report/total MCP tools and REST endpoints (`monthly_report`,
+  `yearly_total`, etc.) are intentionally **not** authz-aware - they remain
+  strictly self-only, unlike the CRUD operations. Extending sharing to
+  aggregate reports (e.g. "let an editor see a shared expense's contribution
+  to my monthly total") is a deliberately unscoped, more nuanced feature

@@ -1,5 +1,5 @@
 from fastapi import APIRouter,  status,FastAPI
-from schemas.expense_schemas import ExpenseCreate, ExpenseResponse, ExpenseUpdate,ExpenseCategoryResponse,ExpenseTransactionRespone,ExpenseReport,MonthlyExpenseAmount,DailyExpenseAmount, YearlyExpenseAmount
+from schemas.expense_schemas import ExpenseCreate, ExpenseResponse, ExpenseUpdate,ExpenseCategoryResponse,ExpenseTransactionRespone,ExpenseReport,MonthlyExpenseAmount,DailyExpenseAmount, YearlyExpenseAmount, ShareExpenseRequest, MessageResponse
 from services import expense_services
 from models.expense_model import user_dependency
 from typing import List
@@ -39,6 +39,14 @@ def update__expense(user: user_dependency,expense_id:int,expense_data: ExpenseUp
 @router.delete("/{expense_id}", response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
 def delete__expense(user:user_dependency,expense_id: int):
     return expense_services.delete_expense(user,expense_id)
+
+@router.post("/{expense_id}/share", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+def share__expense(user: user_dependency, expense_id: int, share_data: ShareExpenseRequest):
+    return expense_services.share_expense(user, expense_id, share_data.target_user_id, share_data.relation)
+
+@router.delete("/{expense_id}/share/{target_user_id}", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+def unshare__expense(user: user_dependency, expense_id: int, target_user_id: int):
+    return expense_services.unshare_expense(user, expense_id, target_user_id)
 
 @router.get("/categories/", response_model=ExpenseCategoryResponse, status_code=status.HTTP_200_OK)
 def expenses__categories(user:user_dependency):

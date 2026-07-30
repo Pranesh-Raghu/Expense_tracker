@@ -57,3 +57,12 @@ class DailyExpenseAmount(BaseModel):
 class YearlyExpenseAmount(BaseModel):
     year: int
     total_expense: float
+
+
+class ShareExpenseRequest(BaseModel):
+    target_user_id: int
+    relation: str  # "viewer" or "editor"
+
+
+class MessageResponse(BaseModel):
+    message: str
