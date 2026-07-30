@@ -1,3 +1,6 @@
+import logging
+import os
+
 from fastapi import FastAPI , Request
 from fastapi.middleware.cors import CORSMiddleware
 from controller import user_controller, expense_controller
@@ -5,7 +8,14 @@ from database import engine, Base
 import auth
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-import os
+
+# One place that configures logging for the whole app - every module below
+# just does `logging.getLogger("expense_tracker.<name>")` and inherits this.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("expense_tracker.main")
 
 from oauth.router import router as oauth_router
 from mcp_server import build_mcp_asgi_app
@@ -26,6 +36,7 @@ Base.metadata.create_all(bind=engine)
 # Idempotent: finds-or-creates the OpenFGA store/model. Safe to call on
 # every startup, including against data left over from a previous run.
 authz_client.bootstrap()
+logger.info("OpenFGA store/model bootstrapped")
 
 # Optional one-time bootstrap for the very first admin: there's no other way
 # to become admin, since granting admin requires already being one. Set
@@ -36,6 +47,7 @@ for _username in filter(None, os.environ.get("INITIAL_ADMIN_USERNAMES", "").spli
     _user = next((u for u in User.get_users() if u.username == _username.strip()), None)
     if _user:
         authz_service.grant_admin(_user.id)
+        logger.info("granted admin to %s (id=%s) via INITIAL_ADMIN_USERNAMES", _user.username, _user.id)
 
 # Bootstrap the mock IdP (mock_idp.py) as a default trusted issuer, purely
 # so Cross-App Access is testable out of the box. In a real deployment,

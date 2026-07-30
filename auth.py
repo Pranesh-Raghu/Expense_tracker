@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import APIRouter, Depends, status, HTTPException
@@ -9,11 +10,19 @@ from passlib.context import CryptContext  # pyright: ignore[reportMissingModuleS
 from models.user_model import User
 from schemas.user_schemas import Token
 from oauth import service as oauth_service
-from oauth.schemas import ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo, SessionInfo
+from oauth.schemas import (
+    ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo,
+    SessionInfo, WebhookCreateRequest, WebhookCreateResponse, WebhookInfo,
+    PasswordlessRequestRequest, PasswordlessRequestResponse, PasswordlessVerifyRequest,
+)
 from authz import service as authz
+import webhooks
 import json
+import secrets
 from database import SessionLocal
-from oauth.models import TrustedIssuer
+from oauth.models import TrustedIssuer, WebhookEndpoint
+
+logger = logging.getLogger("expense_tracker.auth")
 
 router = APIRouter()
 
@@ -69,11 +78,38 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
     user = User.authenticate_user(form_data.username, form_data.password)
 
     if not user:
+        logger.warning("failed login attempt for username=%s", form_data.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Could not validate user')
+
+    logger.info("login: user_id=%s username=%s", user.id, user.username)
+    webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
 
     token = create_access_token(user.username, user.id, timedelta(minutes=100))
 
     return  {'access_token':token, 'token_type':'bearer'}
+
+
+@router.post("/passwordless/request", response_model=PasswordlessRequestResponse)
+def request_passwordless_login(payload: PasswordlessRequestRequest):
+    user = User.get_users()
+    matched = next((u for u in user if u.username == payload.username), None)
+    # Same response whether the username exists or not - a different
+    # response (404 vs 200) would let a caller enumerate valid usernames.
+    if matched:
+        token = oauth_service.request_passwordless_login(matched.id)
+    else:
+        token = "invalid"
+    return PasswordlessRequestResponse(token=token, expires_in=int(oauth_service.PASSWORDLESS_TOKEN_TTL.total_seconds()))
+
+
+@router.post("/passwordless/verify", response_model=Token)
+def verify_passwordless_login(payload: PasswordlessVerifyRequest):
+    user_id = oauth_service.verify_passwordless_login(payload.token)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired login link')
+    user = User.get_user(user_id)
+    access_token = create_access_token(user.username, user.id, timedelta(minutes=100))
+    return {'access_token': access_token, 'token_type': 'bearer'}
 
 
 @router.post("/api-keys", response_model=ApiKeyCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -91,6 +127,49 @@ def list_api_keys(user: user_dependency):
 def revoke_api_key(key_id: str, user: user_dependency):
     if not oauth_service.revoke_api_key(user_id=user['id'], key_id=key_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='API key not found')
+
+
+@router.post("/webhooks", response_model=WebhookCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_webhook(payload: WebhookCreateRequest, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can register a webhook')
+    _dev_hosts = ("http://localhost", "http://127.0.0.1", "http://host.docker.internal")
+    if not (payload.url.startswith("https://") or payload.url.startswith(_dev_hosts)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='webhook url must be https (or localhost/host.docker.internal for dev)')
+    secret = secrets.token_urlsafe(32)
+    with SessionLocal() as db:
+        row = WebhookEndpoint(
+            url=payload.url, secret=secret, events=json.dumps(payload.events),
+            created_by_user_id=user['id'],
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return WebhookCreateResponse(id=row.id, url=row.url, secret=secret, events=payload.events)
+
+
+@router.get("/webhooks", response_model=list[WebhookInfo])
+def list_webhooks(user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can view webhooks')
+    with SessionLocal() as db:
+        rows = db.query(WebhookEndpoint).all()
+        return [
+            WebhookInfo(id=r.id, url=r.url, events=json.loads(r.events), active=r.active, created_at=r.created_at)
+            for r in rows
+        ]
+
+
+@router.delete("/webhooks/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_webhook(webhook_id: int, user: user_dependency):
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can remove a webhook')
+    with SessionLocal() as db:
+        row = db.query(WebhookEndpoint).filter(WebhookEndpoint.id == webhook_id).first()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Webhook not found')
+        db.delete(row)
+        db.commit()
 
 
 @router.get("/sessions", response_model=list[SessionInfo])

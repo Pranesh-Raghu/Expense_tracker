@@ -6,10 +6,14 @@ string format - callers pass plain ints (user ids, expense ids) and get
 plain bools/lists back.
 """
 
+import logging
+
 from fastapi import HTTPException, status
 
 from authz import client
 from authz.model import ORG_OBJECT
+
+logger = logging.getLogger("expense_tracker.authz")
 
 SHARE_RELATIONS = ("viewer", "editor")
 
@@ -63,6 +67,7 @@ def can_share(user_id: int, expense_id: int) -> bool:
 
 def require(allowed: bool, detail: str = "You don't have permission to do that") -> None:
     if not allowed:
+        logger.warning("permission denied: %s", detail)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
@@ -83,12 +88,14 @@ def grant_admin(user_id: int) -> None:
     if is_admin(user_id):
         return
     client.write_tuples(writes=[{"user": _user_ref(user_id), "relation": "admin", "object": ORG_OBJECT}])
+    logger.info("granted admin role to user_id=%s", user_id)
 
 
 def revoke_admin(user_id: int) -> None:
     if not is_admin(user_id):
         return
     client.write_tuples(deletes=[{"user": _user_ref(user_id), "relation": "admin", "object": ORG_OBJECT}])
+    logger.info("revoked admin role from user_id=%s", user_id)
 
 
 def share_expense(expense_id: int, target_user_id: int, relation: str) -> None:

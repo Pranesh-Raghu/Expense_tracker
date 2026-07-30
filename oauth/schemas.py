@@ -68,6 +68,40 @@ class TrustedIssuerInfo(BaseModel):
     created_at: datetime
 
 
+class PasswordlessRequestRequest(BaseModel):
+    username: str
+
+
+class PasswordlessRequestResponse(BaseModel):
+    token: str
+    expires_in: int
+    note: str = "No email service exists in this demo - this token would normally be emailed as a magic link, not returned here."
+
+
+class PasswordlessVerifyRequest(BaseModel):
+    token: str
+
+
+class WebhookCreateRequest(BaseModel):
+    url: str
+    events: list[str]  # e.g. ["expense.created", "expense.shared"]
+
+
+class WebhookCreateResponse(BaseModel):
+    id: int
+    url: str
+    secret: str  # shown once, at creation - store it, it's needed to verify deliveries
+    events: list[str]
+
+
+class WebhookInfo(BaseModel):
+    id: int
+    url: str
+    events: list[str]
+    active: bool
+    created_at: datetime
+
+
 class SessionInfo(BaseModel):
     session_id: str
     client_id: str

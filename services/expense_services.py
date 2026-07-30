@@ -4,6 +4,7 @@ from schemas.expense_schemas import ExpenseCreate, ExpenseUpdate, ExpensePermiss
 from services.expense_services import user_dependency  # noqa: F811
 from validators.expense_validators import date_month_year_validator, month_year_validator,year_validator,user_validator,expense_id_validator
 from authz import service as authz
+import webhooks
 
 
 def _attach_permissions(user_id: int, expense):
@@ -26,6 +27,7 @@ def create_expense(user: user_dependency,expense_data: ExpenseCreate):
     expense = Expense.create_expense(user,expense_data)
 
     authz.on_expense_created(owner_id=user.get('id'), expense_id=expense.id)
+    webhooks.dispatch_event("expense.created", {"expense_id": expense.id, "user_id": user.get('id'), "amount": expense.amount})
 
     return _attach_permissions(user.get('id'), expense)
 
@@ -73,6 +75,8 @@ def update_expense(user: user_dependency,expense_id:int,expense_data: ExpenseUpd
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
 
+    webhooks.dispatch_event("expense.updated", {"expense_id": expense.id, "user_id": user.get('id')})
+
     return _attach_permissions(user.get('id'), expense)
 
 
@@ -86,6 +90,10 @@ def share_expense(user: user_dependency, expense_id: int, target_user_id: int, r
     authz.require(authz.can_share(user.get('id'), expense_id), "You don't have permission to share this expense")
 
     authz.share_expense(expense_id, target_user_id, relation)
+    webhooks.dispatch_event("expense.shared", {
+        "expense_id": expense_id, "shared_by_user_id": user.get('id'),
+        "target_user_id": target_user_id, "relation": relation,
+    })
     return {"message": f"Expense {expense_id} shared with user {target_user_id} as {relation}"}
 
 
@@ -119,6 +127,7 @@ def delete_expense(user:user_dependency,expense_id: int):
     _attach_permissions(user.get('id'), expense)
 
     authz.on_expense_deleted(expense_id)
+    webhooks.dispatch_event("expense.deleted", {"expense_id": expense_id, "user_id": user.get('id')})
 
     return expense
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import secrets
 import time
@@ -12,8 +13,10 @@ from passlib.context import CryptContext
 
 from database import SessionLocal
 from oauth import cimd, keys
-from oauth.models import ApiKey, AuthorizationCode, OAuthClient, RefreshToken, RevokedAccessToken
+from oauth.models import ApiKey, AuthorizationCode, OAuthClient, PasswordlessToken, RefreshToken, RevokedAccessToken
 from oauth.pkce import verify_pkce
+
+logger = logging.getLogger("expense_tracker.oauth")
 
 API_KEY_PREFIX = "eak_"
 
@@ -177,6 +180,7 @@ def consume_authorization_code(*, code: str, client_id: str, redirect_uri: str, 
         if record.redirect_uri != redirect_uri:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: redirect_uri mismatch")
         if not verify_pkce(code_verifier, record.code_challenge, record.code_challenge_method):
+            logger.warning("PKCE verification failed for client_id=%s", client_id)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: PKCE verification failed")
 
         # Mark used immediately: authorization codes are single-use. Replay
@@ -243,6 +247,7 @@ def issue_token_pair(*, user_id: int, client_id: str, scope: Optional[str], reso
         user_id=user_id, client_id=client_id, scope=scope, resource=resource,
         user_agent=user_agent, ip_address=ip_address,
     )
+    logger.info("issued token pair: user_id=%s client_id=%s scope=%s ip=%s", user_id, client_id, scope, ip_address)
     return {
         "access_token": access_token,
         "token_type": "Bearer",
@@ -322,6 +327,7 @@ def revoke_refresh_token(refresh_token: str) -> None:
         if record:
             record.revoked = True
             db.commit()
+            logger.info("revoked refresh token: user_id=%s client_id=%s", record.user_id, record.client_id)
 
 
 def revoke_access_token(access_token: str) -> None:
@@ -335,6 +341,7 @@ def revoke_access_token(access_token: str) -> None:
             expires_at=datetime.fromtimestamp(claims["exp"], tz=timezone.utc).replace(tzinfo=None),
         ))
         db.commit()
+    logger.info("revoked access token: sub=%s client_id=%s jti=%s", claims.get("sub"), claims.get("client_id"), claims.get("jti"))
 
 
 def decode_access_token(access_token: str, *, expected_resource: Optional[str] = None) -> dict:
@@ -401,6 +408,36 @@ def revoke_api_key(*, user_id: int, key_id: str) -> bool:
         record.revoked = True
         db.commit()
         return True
+
+
+# ---------------------------------------------------------------------------
+# Passwordless (magic-link) login
+# ---------------------------------------------------------------------------
+
+PASSWORDLESS_TOKEN_TTL = timedelta(minutes=10)
+
+
+def request_passwordless_login(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    with SessionLocal() as db:
+        db.add(PasswordlessToken(
+            token_hash=_hash_token(token), user_id=user_id,
+            expires_at=_now() + PASSWORDLESS_TOKEN_TTL, used=False,
+        ))
+        db.commit()
+    return token
+
+
+def verify_passwordless_login(token: str) -> Optional[int]:
+    with SessionLocal() as db:
+        record = db.query(PasswordlessToken).filter(PasswordlessToken.token_hash == _hash_token(token)).first()
+        if not record or record.used or record.expires_at < _now():
+            return None
+        # Single-use, same reasoning as authorization codes: mark used
+        # immediately so a captured link can't be replayed.
+        record.used = True
+        db.commit()
+        return record.user_id
 
 
 def introspect(token: str) -> dict:

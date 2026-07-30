@@ -1,8 +1,9 @@
 # Expense Tracker
 
 A FastAPI expense tracker with a full OAuth 2.1 authorization server (Dynamic
-Client Registration + Client ID Metadata Documents), static API keys, an MCP
-server exposing the same expense data as tools for AI agents, and RBAC +
+Client Registration, Client ID Metadata Documents, Cross-App Access),
+static API keys, passwordless login, session/device tracking, webhooks, an
+MCP server exposing the same expense data as tools for AI agents, and RBAC +
 fine-grained authorization (OpenFGA) governing who can see, edit, delete, or
 share which expenses.
 
@@ -21,14 +22,19 @@ share which expenses.
   - [Dynamic Client Registration (DCR)](#dynamic-client-registration-dcr)
   - [Client ID Metadata Documents (CIMD)](#client-id-metadata-documents-cimd)
   - [API keys](#api-keys)
+  - [Passwordless (magic-link) login](#passwordless-magic-link-login)
+  - [Cross-App Access (RFC 7523 JWT-bearer grant)](#cross-app-access-rfc-7523-jwt-bearer-grant)
+  - [Sessions](#sessions)
 - [Authorization: RBAC + fine-grained access (OpenFGA)](#authorization-rbac--fine-grained-access-openfga)
 - [MCP server](#mcp-server)
+- [Webhooks](#webhooks)
 - [REST API reference](#rest-api-reference)
 - [Database schema](#database-schema)
 - [Testing the OAuth + MCP flow end to end](#testing-the-oauth--mcp-flow-end-to-end)
 - [Testing RBAC + sharing end to end](#testing-rbac--sharing-end-to-end)
 - [Automated tests](#automated-tests)
 - [Project structure](#project-structure)
+- [Logging](#logging)
 - [Troubleshooting](#troubleshooting)
 - [Security notes](#security-notes)
 
@@ -163,6 +169,8 @@ Compose (see `.env.example`):
 | `SQL_ECHO` | `false` | Set `true` to log all SQL statements. |
 | `OPENFGA_API_URL` | `http://openfga:8080` | Where the app reaches OpenFGA. Set by `docker-compose.yml` directly (internal Docker network address) - not normally something you need to change. |
 | `INITIAL_ADMIN_USERNAMES` | *(empty)* | Comma-separated usernames to grant the `admin` role on startup. **The only way to create the first admin** - granting admin via `POST /auth/admin/{id}` requires already being one. No-op for usernames that don't exist yet; safe to leave set across restarts. |
+| `LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) for the whole app. See [Logging](#logging). |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated origins allowed to call the API cross-origin. Bearer-token auth only, so `allow_credentials` stays disabled regardless. |
 
 `OAUTH_ISSUER` matters more than it looks: every access token's audience
 check, every metadata document's URLs, and every CIMD self-certification
@@ -370,6 +378,92 @@ hash is stored. Use it directly as a Bearer token:
 curl http://localhost:8000/expenses/ -H "Authorization: Bearer eak_..."
 ```
 
+### Passwordless (magic-link) login
+
+No email service exists in this project, so the "magic link" token is
+returned directly in the API response instead of being emailed - that's the
+demo stand-in for delivery, not a design choice for a real deployment.
+
+```bash
+curl -X POST http://localhost:8000/auth/passwordless/request \
+  -H 'Content-Type: application/json' -d '{"username": "alice"}'
+# {"token": "...", "expires_in": 600, "note": "would normally be emailed..."}
+
+curl -X POST http://localhost:8000/auth/passwordless/verify \
+  -H 'Content-Type: application/json' -d '{"token": "<paste the token>"}'
+# {"access_token": "...", "token_type": "bearer"} - a normal REST session token
+```
+
+The token is single-use (10 minute TTL) and requesting one for a
+nonexistent username returns the same response shape as a real one - a
+different response would let a caller enumerate valid usernames.
+
+### Cross-App Access (RFC 7523 JWT-bearer grant)
+
+Lets a client already holding a signed identity assertion from a **trusted
+external issuer** (a real IdP - Okta, Auth0, your company SSO) exchange it
+at `/oauth/token` for a native access token here, with **no interactive
+login** for that user at this server. This is the "Cross-App Access" / ID-JAG
+pattern: one app, already trusted by a shared identity provider, acting on a
+user's behalf against a second app's resources.
+
+Since no real external IdP is available for a demo, `mock_idp.py` stands in
+for one - deliberately signed with its **own, separate** RSA keypair (not the
+main OAuth AS's), because the whole point of Cross-App Access only holds if
+the assertion genuinely comes from a different trust domain. **Delete
+`mock_idp.py` and don't run it in a real deployment** - add your actual
+external IdP as a `TrustedIssuer` instead.
+
+```bash
+# 1. get an identity assertion from the (mock) external IdP
+ASSERTION=$(curl -s -X POST http://localhost:8000/mock-idp/login -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"yourpassword","audience":"<your OAUTH_ISSUER value>"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['identity_assertion'])")
+
+# 2. register a "requesting app" client (any DCR/CIMD client works)
+CLIENT_ID=$(curl -s -X POST http://localhost:8000/oauth/register -H 'Content-Type: application/json' \
+  -d '{"redirect_uris":["http://localhost:9000/callback"],"client_name":"requesting-app"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['client_id'])")
+
+# 3. exchange the assertion for a native token - no /oauth/authorize involved
+curl -X POST http://localhost:8000/oauth/token \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
+  -d "assertion=$ASSERTION" -d "client_id=$CLIENT_ID"
+```
+
+The trust boundary is real, not a formality: the assertion's signature is
+verified against the issuer's own JWKS, its `aud` must match this server's
+`OAUTH_ISSUER` exactly, and only issuers explicitly added via
+`POST /auth/trusted-issuers` (admin-only) are ever honored. Manage trusted
+issuers with:
+
+```bash
+curl http://localhost:8000/auth/trusted-issuers -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -X POST http://localhost:8000/auth/trusted-issuers -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"issuer":"https://your-idp.example.com","jwks_url":"https://your-idp.example.com/.well-known/jwks.json","subject_claim":"preferred_username"}'
+curl -X DELETE "http://localhost:8000/auth/trusted-issuers/<issuer-url>" -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Sessions
+
+Every OAuth refresh token issued (via any grant - authorization code,
+refresh, or Cross-App Access) is tracked with the device/IP that requested
+it, so a user can see and individually kill their active logins - the same
+idea as "manage your devices" in most real apps.
+
+```bash
+curl http://localhost:8000/auth/sessions -H "Authorization: Bearer $TOKEN"
+# [{"session_id": "...", "client_id": "...", "user_agent": "...", "ip_address": "...", "created_at": "...", "last_used_at": "..."}]
+
+curl -X DELETE http://localhost:8000/auth/sessions/<session_id> -H "Authorization: Bearer $TOKEN"
+```
+
+Revoking a session kills the underlying refresh token immediately (not just
+hides it from the list) - a subsequent `refresh_token` grant against it
+fails with `invalid_grant`. Sessions predating this feature show `null`
+device/IP fields, since that data was never captured for them.
+
 ## Authorization: RBAC + fine-grained access (OpenFGA)
 
 Authentication (the sections above) answers "who are you?" Authorization -
@@ -486,6 +580,41 @@ tools are intentionally **not** RBAC/FGA-aware - they remain self-only,
 unlike the CRUD tools above; see
 [Authorization](#authorization-rbac--fine-grained-access-openfga).)
 
+## Webhooks
+
+Admin-managed HTTP notifications for events, signed the same way
+Stripe/GitHub webhooks are (HMAC-SHA256 over the raw request body), so a
+receiver can verify a request genuinely came from this app.
+
+```bash
+curl -X POST http://localhost:8000/auth/webhooks -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://your-receiver.example.com/hook", "events": ["expense.created", "expense.shared"]}'
+# {"id": 1, "url": "...", "secret": "...", "events": [...]} - secret is shown once, save it
+
+curl http://localhost:8000/auth/webhooks -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -X DELETE http://localhost:8000/auth/webhooks/1 -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+**Events emitted**: `expense.created`, `expense.updated`, `expense.deleted`,
+`expense.shared`, `user.login`.
+
+**Delivery**: `POST` to the registered URL with:
+
+```
+X-Webhook-Event: expense.created
+X-Webhook-Signature: sha256=<hex hmac>
+```
+```json
+{"event": "expense.created", "data": {"expense_id": 5, "user_id": 1, "amount": 42.5}, "timestamp": 1234567890}
+```
+
+Verify it in your receiver: `hmac.new(secret, raw_request_body, sha256).hexdigest()`
+must equal the value after `sha256=` in the header (constant-time compare).
+Delivery is best-effort and synchronous with a 3 second timeout - a broken
+or slow receiver is logged and skipped, never allowed to fail the actual
+operation that triggered the event.
+
 ## REST API reference
 
 | Method | Path | Auth | Description |
@@ -497,15 +626,23 @@ unlike the CRUD tools above; see
 | `PATCH` | `/users/{id}` | Bearer (admin) | Partially update a user |
 | `DELETE` | `/users/{id}` | Bearer (admin) | Delete a user |
 | `POST` | `/auth/token` | none | Log in, get a REST session JWT |
+| `POST` | `/auth/passwordless/request` | none | Request a magic-link token (returned directly - no email service) |
+| `POST` | `/auth/passwordless/verify` | none | Exchange a magic-link token for a REST session JWT |
 | `POST` | `/auth/api-keys` | Bearer | Create an API key |
 | `GET` | `/auth/api-keys` | Bearer | List your API keys |
 | `DELETE` | `/auth/api-keys/{key_id}` | Bearer | Revoke an API key |
+| `GET` | `/auth/sessions` | Bearer | List your active sessions (device/IP/timestamps) |
+| `DELETE` | `/auth/sessions/{session_id}` | Bearer | Revoke one session |
 | `GET` | `/auth/me` | Bearer | Current user + `is_admin` |
 | `POST` | `/auth/admin/{user_id}` | Bearer (admin) | Grant the admin role |
 | `DELETE` | `/auth/admin/{user_id}` | Bearer (admin) | Revoke the admin role |
+| `GET` `POST` `DELETE` | `/auth/trusted-issuers` | Bearer (admin) | Manage Cross-App Access trusted issuers |
+| `GET` `POST` `DELETE` | `/auth/webhooks` | Bearer (admin) | Manage webhook endpoints |
 | `GET` `POST` `PUT` `DELETE` | `/expenses/...` | Bearer | Full expense CRUD (authz-checked) + category/transaction/report filters |
 | `POST` | `/expenses/{id}/share` | Bearer (owner/admin) | Share an expense as viewer/editor |
 | `DELETE` | `/expenses/{id}/share/{user_id}` | Bearer (owner/admin) | Remove a user's shared access |
+| `POST` | `/oauth/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) | none | Cross-App Access: exchange a trusted identity assertion for a native token |
+| `POST` | `/mock-idp/login` | none | Demo-only: issue an identity assertion from the mock external IdP |
 
 Interactive docs: `http://localhost:8000/docs`.
 
@@ -541,9 +678,12 @@ Interactive docs: `http://localhost:8000/docs`.
 |---|---|
 | `oauth_clients` | DCR-registered clients (CIMD clients never get a row - their identity lives at their `client_id` URL) |
 | `oauth_authorization_codes` | Single-use authorization codes with their PKCE challenge, 5 minute TTL |
-| `oauth_refresh_tokens` | Hashed refresh tokens, rotated on use, 30 day TTL |
+| `oauth_refresh_tokens` | Hashed refresh tokens, rotated on use, 30 day TTL - also the session/device table (`user_agent`, `ip_address`, `created_at`, `last_used_at`) surfaced by `/auth/sessions` |
 | `oauth_revoked_access_tokens` | JTIs of access tokens revoked before natural expiry |
 | `api_keys` | Hashed static API keys |
+| `oauth_trusted_issuers` | External IdPs trusted for Cross-App Access (issuer, JWKS URL, subject claim, allowed client ids) |
+| `webhook_endpoints` | Registered webhook URLs, their HMAC secret, and subscribed event types |
+| `passwordless_tokens` | Hashed single-use magic-link tokens, 10 minute TTL |
 
 Access tokens themselves are **not** stored - they're self-contained,
 RS256-signed JWTs, verified against the public key in
@@ -699,10 +839,12 @@ with manual testing data.
 
 ```
 Expense_tracker/
-├── main.py                    # FastAPI app: wires REST, OAuth, and MCP together
-├── auth.py                    # REST API login (/auth/token) + API key management
+├── main.py                    # FastAPI app: wires REST, OAuth, MCP, mock IdP together
+├── auth.py                    # REST login, API keys, sessions, admin, trusted issuers, webhooks
 ├── database.py                # SQLAlchemy engine/session, DATABASE_URL from env
 ├── mcp_server.py               # FastMCP server + tool definitions, mounted at /mcp
+├── mock_idp.py                 # demo-only external IdP for Cross-App Access (own signing key)
+├── webhooks.py                  # HMAC-signed event dispatch
 │
 ├── models/
 │   ├── user_model.py           # users table + auth queries
@@ -715,12 +857,13 @@ Expense_tracker/
 │
 ├── oauth/                      # the OAuth 2.1 authorization server
 │   ├── router.py                # /oauth/*, /.well-known/* endpoints
-│   ├── service.py                # token issuance/validation, API keys, business logic
-│   ├── models.py                  # oauth_clients, authorization_codes, refresh_tokens, api_keys
-│   ├── schemas.py                  # DCR / token / API key Pydantic models
+│   ├── service.py                # token issuance/validation, API keys, sessions, passwordless
+│   ├── models.py                  # oauth_clients, refresh_tokens, api_keys, trusted_issuers, webhooks, passwordless_tokens
+│   ├── schemas.py                  # DCR / token / API key / session / webhook Pydantic models
 │   ├── cimd.py                      # Client ID Metadata Document fetch + validation
+│   ├── cross_app_access.py           # RFC 7523 identity assertion verification (Cross-App Access)
 │   ├── pkce.py                       # PKCE S256 verification
-│   ├── keys.py                        # RSA signing key generation/persistence, JWKS
+│   ├── keys.py                        # RSA signing key generation/persistence, JWKS (reusable SigningKeySet)
 │   └── token_verifier.py               # HybridTokenVerifier (OAuth JWT or API key) for FastMCP
 │
 ├── authz/                      # RBAC + fine-grained authorization (OpenFGA)
@@ -744,6 +887,32 @@ Expense_tracker/
 ├── pytest.ini                     # testpaths = tests
 └── keys/                          # persisted RSA signing key (docker volume, gitignored)
 ```
+
+## Logging
+
+Configured once, centrally, in `main.py` - every other module just does
+`logging.getLogger("expense_tracker.<name>")` and inherits the format/level
+from there. Set `LOG_LEVEL` (`.env`) to change verbosity; no code changes
+needed.
+
+```bash
+docker compose logs -f app | grep expense_tracker
+```
+
+What gets logged (`INFO` unless noted):
+
+| Logger | Events |
+|---|---|
+| `expense_tracker.main` | Startup: OpenFGA bootstrap, `INITIAL_ADMIN_USERNAMES` grants |
+| `expense_tracker.auth` | REST login success/failure (`WARNING` on failure) |
+| `expense_tracker.oauth` | Token issuance, refresh/access token revocation, PKCE failures (`WARNING`) |
+| `expense_tracker.authz` | Permission denials (`WARNING`), admin role grant/revoke |
+| `expense_tracker.cross_app_access` | Identity assertion / signing-key resolution failures (`WARNING`) |
+| `expense_tracker.webhooks` | Delivery failures (`WARNING`) - never raised back to the caller |
+
+This is intentionally audit-focused (who did what, what got denied, what
+failed to deliver) rather than access logging - uvicorn already logs every
+HTTP request on its own.
 
 ## Troubleshooting
 
@@ -835,6 +1004,41 @@ Pydantic's `.model_dump()` includes every field, `None` or not - a downstream
 then always true regardless of whether the caller actually provided it. Use
 `.model_dump(exclude_none=True)` when only present fields should be applied
 (fixed in `services/expense_services.py:update_expense`).
+</details>
+
+<details>
+<summary>An outbound call from an <code>async def</code> route hangs for exactly the client timeout, then fails</summary>
+
+A **synchronous**, blocking `httpx.Client` call made from inside an `async
+def` FastAPI handler freezes the single event loop for the whole request.
+If the URL being fetched happens to be this very app's own public URL
+(e.g. fetching a JWKS from a tunnel that routes back to this same
+container - see Cross-App Access), that's a genuine deadlock: the blocked
+loop can't accept the inbound request it's simultaneously waiting to serve,
+so it just times out. Always use `httpx.AsyncClient` + `await` in code
+reachable from an async handler (`oauth/cimd.py` and
+`oauth/cross_app_access.py` both do this correctly now - the latter didn't,
+originally, and that's exactly how this was found).
+</details>
+
+<details>
+<summary>New columns added to a SQLAlchemy model don't show up, or inserts fail with <code>Unknown column</code></summary>
+
+`Base.metadata.create_all()` only creates tables that don't exist yet - it
+never alters an existing table's columns. Adding a field to a model
+(`RefreshToken.user_agent`, in this project's case) after the table has
+already been created requires a manual migration:
+
+```bash
+docker exec <db-container> mysql -uroot -p"$MYSQL_ROOT_PASSWORD" expensetracker -e "
+  ALTER TABLE oauth_refresh_tokens ADD COLUMN user_agent VARCHAR(512) NULL;
+"
+```
+
+There's no migration framework here (no Alembic) - this project is a demo,
+not something with a production upgrade path. If existing rows need
+non-NULL values for a response model that requires them, backfill with an
+`UPDATE ... SET col = NOW() WHERE col IS NULL` right after the `ALTER TABLE`.
 </details>
 
 ## Security notes
