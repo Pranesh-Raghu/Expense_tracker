@@ -15,12 +15,18 @@
 # render.yaml for anything real.
 
 services:
+  # Plain prebuilt image, not the openfga/Dockerfile wrapper render.yaml
+  # uses: openfga/openfga is a shell-less/distroless-style image (no
+  # /bin/sh), so a custom Dockerfile that COPYs + chmods + execs a shell
+  # script fails at build time ("exec: /bin/sh: no such file"), and even
+  # if it built, the script's #!/bin/sh shebang could never run anyway.
+  # SQLite needs no MySQL-DSN composition, so there's nothing to wrap here.
   - name: expense-tracker-openfga-smoketest
     type: web
-    runtime: docker
+    runtime: image
     plan: free
-    dockerfilePath: ./openfga/Dockerfile
-    dockerContext: ./openfga
+    image:
+      url: docker.io/openfga/openfga:latest
     envVars:
       - key: OPENFGA_DATASTORE_ENGINE
         value: sqlite
@@ -30,6 +36,9 @@ services:
         value: "false"
       - key: OPENFGA_LOG_FORMAT
         value: text
+    # No preDeployCommand (unsupported on free plan) - run
+    # `render jobs create <this-service-id> --start-command migrate` once
+    # by hand after the first deploy instead.
     dockerCommand: run
 
   - name: expense-tracker-app-smoketest
