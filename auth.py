@@ -10,7 +10,7 @@ from typing import Annotated
 from passlib.context import CryptContext  # pyright: ignore[reportMissingModuleSource]
 from models.user_model import User
 from schemas.user_schemas import Token
-from avatar import gravatar_url
+from avatar import gravatar_url_strict
 from oauth import service as oauth_service
 from oauth.schemas import (
     ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo,
@@ -114,7 +114,7 @@ def google_callback(code: str, state: str):
     if not email or not userinfo.get('email_verified'):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Google account has no verified email')
 
-    user = User.find_or_create_by_email(email)
+    user = User.find_or_create_by_email(email, picture_url=userinfo.get('picture'))
     logger.info("google login: user_id=%s username=%s", user.id, user.username)
     webhooks.dispatch_event("user.login", {"user_id": user.id, "username": user.username})
 
@@ -242,7 +242,11 @@ def get_my_permissions(user: user_dependency):
         'id': user['id'],
         'is_admin': authz.is_admin(user['id']),
         'email': db_user.email if db_user else None,
-        'avatar_url': gravatar_url(db_user.email) if db_user and db_user.email else None,
+        # Gravatar (email-derived) is tried first; fallback_avatar_url
+        # (Google's photo, if this account ever signed in with Google) is
+        # only used client-side if Gravatar 404s - see Avatar.tsx.
+        'avatar_url': gravatar_url_strict(db_user.email) if db_user and db_user.email else None,
+        'fallback_avatar_url': db_user.picture_url if db_user else None,
     }
 
 

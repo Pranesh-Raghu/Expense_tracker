@@ -1,5 +1,6 @@
 import re
 import secrets
+from typing import Optional
 
 from sqlalchemy import Column, Integer, String,Boolean
 from sqlalchemy.orm import Mapped, mapped_column
@@ -18,6 +19,11 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set from Google's OAuth `picture` claim at login (see auth.py's
+    # /auth/google/callback) - preferred over the Gravatar fallback when
+    # present, since it's the user's actual photo rather than a generated
+    # identicon. Null for accounts that have never signed in with Google.
+    picture_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
     
     
@@ -59,15 +65,23 @@ class User(Base):
            return db_user
 
     @staticmethod
-    def find_or_create_by_email(email: str):
+    def find_or_create_by_email(email: str, picture_url: Optional[str] = None):
         """For Google sign-in: matches an existing account by email
         (auto-linking a Google login to a password-based account with the
         same address), or creates a new one if none exists. Google-created
         accounts get a random, never-shown password - they're not meant to
-        ever log in with a password, just to satisfy the NOT NULL column."""
+        ever log in with a password, just to satisfy the NOT NULL column.
+
+        `picture_url` (Google's OAuth `picture` claim) is refreshed on
+        every login, in case the user's Google photo changed since last
+        time."""
         with SessionLocal() as db:
             existing = db.query(User).filter(User.email == email).first()
             if existing:
+                if picture_url and existing.picture_url != picture_url:
+                    existing.picture_url = picture_url
+                    db.commit()
+                    db.refresh(existing)
                 return existing
 
             last_user = db.query(User).order_by(User.id.desc()).first()
@@ -79,6 +93,7 @@ class User(Base):
                 username=username,
                 email=email,
                 password=pwd_context.hash(secrets.token_urlsafe(32)),
+                picture_url=picture_url,
             )
             db.add(db_user)
             db.commit()

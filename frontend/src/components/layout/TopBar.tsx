@@ -19,7 +19,10 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
             <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-        <span className="text-sm font-semibold">Expense Tracker</span>
+        <span className="text-sm font-semibold">
+          <span className="text-brand-600 dark:text-brand-500">E</span>xpense{' '}
+          <span className="text-brand-600 dark:text-brand-500">T</span>racker
+        </span>
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
         {kind === 'apikey' && <Badge tone="brand" className="hidden sm:inline-flex">API key session</Badge>}

@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/cn'
 
 interface AvatarProps {
   username: string
   avatarUrl?: string | null
+  fallbackAvatarUrl?: string | null
   size?: number
   className?: string
 }
@@ -24,21 +25,29 @@ function colorForUsername(username: string): string {
   return INITIAL_COLORS[code % INITIAL_COLORS.length]
 }
 
-// Gravatar (email-derived) is the default; if there's no avatar_url at all
-// (no email set) or the image fails to load, falls back to a colored
-// initial from the username - never a broken-image icon.
-export function Avatar({ username, avatarUrl, size = 32, className }: AvatarProps) {
-  const [imageFailed, setImageFailed] = useState(false)
-  const showImage = avatarUrl && !imageFailed
+// Cascades through up to three sources, in priority order: Gravatar
+// (email-derived - avatarUrl, requested in "strict" mode so it 404s
+// instead of returning a generated identicon) -> fallbackAvatarUrl
+// (Google's real photo, if this account signed in with Google) -> a
+// colored initial from the username. Never a broken-image icon.
+export function Avatar({ username, avatarUrl, fallbackAvatarUrl, size = 32, className }: AvatarProps) {
+  const sources = useMemo(() => [avatarUrl, fallbackAvatarUrl].filter(Boolean) as string[], [avatarUrl, fallbackAvatarUrl])
+  const [sourceIndex, setSourceIndex] = useState(0)
 
-  if (showImage) {
+  useEffect(() => {
+    setSourceIndex(0)
+  }, [sources])
+
+  const currentSrc = sources[sourceIndex]
+
+  if (currentSrc) {
     return (
       <img
-        src={avatarUrl}
+        src={currentSrc}
         alt={username}
         width={size}
         height={size}
-        onError={() => setImageFailed(true)}
+        onError={() => setSourceIndex((i) => i + 1)}
         className={cn('rounded-full object-cover', className)}
       />
     )

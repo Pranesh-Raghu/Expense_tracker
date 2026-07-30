@@ -75,6 +75,7 @@ export interface User {
   username: string
   email: string
   avatar_url: string
+  fallback_avatar_url: string | null
 }
 
 export interface UserUpdateInput {
@@ -88,7 +89,11 @@ export interface Me {
   username: string
   is_admin: boolean
   email: string | null
+  // Gravatar (email-derived) is tried first; fallback_avatar_url (Google's
+  // photo, if this account signed in with Google) is only used if
+  // avatar_url 404s - see components/ui/Avatar.tsx.
   avatar_url: string | null
+  fallback_avatar_url: string | null
 }
 
 export interface Token {

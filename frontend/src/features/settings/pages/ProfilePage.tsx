@@ -73,7 +73,12 @@ export function ProfilePage() {
       <h1 className="text-lg font-semibold">Profile</h1>
 
       <Card className="flex items-center gap-4">
-        <Avatar username={watchedUsername || user.username} avatarUrl={user.avatar_url} size={56} />
+        <Avatar
+          username={watchedUsername || user.username}
+          avatarUrl={user.avatar_url}
+          fallbackAvatarUrl={user.fallback_avatar_url}
+          size={56}
+        />
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Your picture comes from{' '}
           <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline">

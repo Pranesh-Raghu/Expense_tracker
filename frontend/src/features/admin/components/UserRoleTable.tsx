@@ -41,7 +41,12 @@ function UserCard({ user, isMe }: { user: User; isMe: boolean }) {
     <Card className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Avatar username={user.username} avatarUrl={user.avatar_url} size={40} />
+          <Avatar
+            username={user.username}
+            avatarUrl={user.avatar_url}
+            fallbackAvatarUrl={user.fallback_avatar_url}
+            size={40}
+          />
           <div>
             <p className="text-sm font-semibold">
               {user.username}

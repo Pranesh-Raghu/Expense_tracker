@@ -29,7 +29,12 @@ export function AccountMenu() {
         aria-label="Account menu"
         aria-expanded={open}
       >
-        <Avatar username={user.username} avatarUrl={user.avatar_url} size={28} />
+        <Avatar
+          username={user.username}
+          avatarUrl={user.avatar_url}
+          fallbackAvatarUrl={user.fallback_avatar_url}
+          size={28}
+        />
         <span className="hidden text-sm text-slate-600 dark:text-slate-300 sm:inline">{user.username}</span>
       </button>
 
