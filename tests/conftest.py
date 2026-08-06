@@ -10,12 +10,15 @@ Run with the stack up: `pytest` (needs `pip install pytest requests`).
 import base64
 import hashlib
 import os
+import re
 import secrets
+import time
 
 import pytest
 import requests
 
 BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8000")
+MAILPIT_URL = os.environ.get("TEST_MAILPIT_URL", "http://localhost:8025")
 
 
 def unique(prefix: str) -> str:
@@ -48,6 +51,34 @@ def create_user(base_url: str, username: str, password: str) -> int:
     resp = requests.post(f"{base_url}/users/", json={"email": f"{username}@example.com", "password": password})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+def get_passwordless_login_code(to_address: str, timeout: float = 5.0) -> str:
+    """Polls Mailpit (the fake SMTP server docker-compose runs for dev/test -
+    see email_sender.py) for the most recent email to `to_address` and pulls
+    the login code out of its body. The passwordless-login API response
+    never carries the code itself (see auth.py's request_passwordless_login)
+    - this is now the only way a test can complete that flow, same as a real
+    user checking their inbox."""
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            messages = requests.get(f"{MAILPIT_URL}/api/v1/messages").json().get("messages", [])
+            matching = next((m for m in messages if any(t["Address"] == to_address for t in m["To"])), None)
+            if matching:
+                detail = requests.get(f"{MAILPIT_URL}/api/v1/message/{matching['ID']}").json()
+                # Matches secrets.token_urlsafe(32)'s output (~43 chars of
+                # [A-Za-z0-9_-]) - simpler and CRLF-agnostic compared to
+                # anchoring on the surrounding line's exact whitespace/line
+                # endings, which SMTP normalizes to \r\n.
+                match = re.search(r"[A-Za-z0-9_-]{30,}", detail["Text"])
+                if match:
+                    return match.group(0)
+        except (requests.RequestException, KeyError) as exc:
+            last_error = exc
+        time.sleep(0.2)
+    raise AssertionError(f"no passwordless-login email arrived for {to_address} within {timeout}s ({last_error})")
 
 
 def rest_login(base_url: str, username: str, password: str) -> str:

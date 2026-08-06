@@ -1,6 +1,8 @@
 import requests
 
-from tests.conftest import create_user, oauth_login, register_client, rest_login, unique
+from tests.conftest import (
+    create_user, get_passwordless_login_code, oauth_login, register_client, rest_login, unique,
+)
 
 
 def auth_header(token: str) -> dict:
@@ -88,7 +90,9 @@ def test_passwordless_login_round_trip(base_url):
 
     requested = requests.post(f"{base_url}/auth/passwordless/request", json={"username": username})
     assert requested.status_code == 200
-    magic_token = requested.json()["token"]
+    # The response never carries the code (see auth.py) - only the account's
+    # real inbox does. Mailpit stands in for that inbox here.
+    magic_token = get_passwordless_login_code(f"{username}@example.com")
 
     verified = requests.post(f"{base_url}/auth/passwordless/verify", json={"token": magic_token})
     assert verified.status_code == 200
@@ -104,9 +108,17 @@ def test_passwordless_login_round_trip(base_url):
 
 
 def test_passwordless_request_does_not_leak_username_existence(base_url):
-    resp = requests.post(f"{base_url}/auth/passwordless/request", json={"username": unique("doesnotexist")})
-    assert resp.status_code == 200
-    assert resp.json()["token"] == "invalid"
+    # Same response shape whether the username exists or not, and neither
+    # case ever returns a usable code (see auth.py) - a caller learns
+    # nothing that would let them tell the two apart, or log in either way.
+    real_username = unique("real")
+    create_user(base_url, real_username, "password123")
+
+    real = requests.post(f"{base_url}/auth/passwordless/request", json={"username": real_username})
+    fake = requests.post(f"{base_url}/auth/passwordless/request", json={"username": unique("doesnotexist")})
+
+    assert real.status_code == fake.status_code == 200
+    assert real.json() == fake.json()
 
 
 def test_webhook_management_requires_admin(base_url):

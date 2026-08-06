@@ -73,9 +73,13 @@ class PasswordlessRequestRequest(BaseModel):
 
 
 class PasswordlessRequestResponse(BaseModel):
-    token: str
+    # No token here on purpose, and this response is identical whether or
+    # not the username exists (see auth.py's request_passwordless_login) -
+    # the login code itself only ever goes out over email
+    # (email_sender.send_passwordless_login_code), never back to the caller
+    # over the API. Returning it here would let anyone who knows a
+    # username log in as them with zero credentials.
     expires_in: int
-    note: str = "No email service exists in this demo - this token would normally be emailed as a magic link, not returned here."
 
 
 class PasswordlessVerifyRequest(BaseModel):

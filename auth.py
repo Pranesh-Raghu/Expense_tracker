@@ -21,6 +21,7 @@ from oauth.schemas import (
 )
 from authz import service as authz
 from ssrf_guard import is_public_hostname
+import email_sender
 import rate_limit
 import google_oauth
 import webhooks
@@ -212,13 +213,19 @@ def request_passwordless_login(request: Request, payload: PasswordlessRequestReq
 
     user = User.get_users()
     matched = next((u for u in user if u.username == payload.username), None)
-    # Same response whether the username exists or not - a different
-    # response (404 vs 200) would let a caller enumerate valid usernames.
     if matched:
         token = oauth_service.request_passwordless_login(matched.id)
-    else:
-        token = "invalid"
-    return PasswordlessRequestResponse(token=token, expires_in=int(oauth_service.PASSWORDLESS_TOKEN_TTL.total_seconds()))
+        email_sender.send_passwordless_login_code(
+            matched.email, token, int(oauth_service.PASSWORDLESS_TOKEN_TTL.total_seconds())
+        )
+    # Same response whether the username exists or not, and it never carries
+    # the login code either way - a caller only ever learns "an email may
+    # have gone out", never gets back something they could use to log in.
+    # A different response (or a real token only when the user exists)
+    # would let anyone who knows a username both enumerate accounts and log
+    # in as them with zero credentials - which is exactly what this
+    # endpoint used to do before email_sender.py existed.
+    return PasswordlessRequestResponse(expires_in=int(oauth_service.PASSWORDLESS_TOKEN_TTL.total_seconds()))
 
 
 @router.post("/passwordless/verify", response_model=Token)
