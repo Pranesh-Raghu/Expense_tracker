@@ -59,10 +59,19 @@ def test_sessions_list_and_revoke(base_url):
 
     rest_token = rest_login(base_url, username, "password123")
     sessions = requests.get(f"{base_url}/auth/sessions", headers=auth_header(rest_token)).json()
-    assert len(sessions) == 1
-    session_id = sessions[0]["session_id"]
+    # Two independent logins, two distinct sessions - the OAuth
+    # authorization_code flow (the registered third-party client_id) and
+    # this rest_login password grant (tracked under the fixed
+    # "expense-tracker-web" client_id, see oauth/service.py's
+    # WEB_SESSION_CLIENT_ID). Same idea as a "your devices & connected
+    # apps" page listing a browser session and a connected app separately -
+    # they shouldn't collapse into one. Pick the OAuth one by client_id
+    # rather than assuming list order, since list_sessions sorts by
+    # last_used_at and rest_login (the most recent action) sorts first.
+    assert len(sessions) == 2
+    oauth_session = next(s for s in sessions if s["client_id"] == client_id)
 
-    revoke = requests.delete(f"{base_url}/auth/sessions/{session_id}", headers=auth_header(rest_token))
+    revoke = requests.delete(f"{base_url}/auth/sessions/{oauth_session['session_id']}", headers=auth_header(rest_token))
     assert revoke.status_code == 204
 
     # the underlying refresh token must actually be dead, not just hidden from the list
