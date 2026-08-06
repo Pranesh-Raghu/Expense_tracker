@@ -80,6 +80,24 @@ def list_viewable_expense_ids(user_id: int) -> list[int]:
     return [int(obj.split(":", 1)[1]) for obj in objects]
 
 
+def bulk_expense_permissions(user_id: int) -> dict[str, set[int]]:
+    """The ids of every expense this user can edit/delete/share, one
+    list_objects call per relation (3 total) - not one check() call per
+    (expense, relation) pair. attach_bulk_permissions below uses this to
+    give a whole list response its per-expense permissions in O(1) OpenFGA
+    round trips per relation instead of O(number of expenses)."""
+    user_ref = _user_ref(user_id)
+
+    def _ids(relation: str) -> set[int]:
+        return {int(obj.split(":", 1)[1]) for obj in client.list_objects(user_ref, relation, "expense")}
+
+    return {
+        "can_edit": _ids("can_edit"),
+        "can_delete": _ids("can_delete"),
+        "can_share": _ids("can_share"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Role and sharing management
 # ---------------------------------------------------------------------------

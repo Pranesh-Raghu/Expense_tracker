@@ -11,7 +11,14 @@ def get__all__expenses(user:user_dependency):
     return expense_services.get_all_expenses(user)
 
 
-@router.get("/{expense_id}",response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
+#  ":int" constrains this segment to digits only, so a literal path like
+# /categories or /transactions below can never accidentally match here -
+# without it, Starlette matches *any* single path segment (since it's
+# registered first) and FastAPI's own int coercion of expense_id then fails
+# with a confusing 422, instead of falling through to the intended route.
+# See frontend/src/api/endpoints/expenses.ts for the workaround this let the
+# frontend drop.
+@router.get("/{expense_id:int}",response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
 def get__expense__by__id(user: user_dependency,expense_id:int):
     return expense_services.get_expense_by_id(user,expense_id)
 
@@ -19,22 +26,22 @@ def get__expense__by__id(user: user_dependency,expense_id:int):
 @router.post("/", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 def create__expense(user:user_dependency, expense: ExpenseCreate):
     return expense_services.create_expense(user,expense)
-    
 
-@router.put("/{expense_id}",response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
+
+@router.put("/{expense_id:int}",response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
 def update__expense(user: user_dependency,expense_id:int,expense_data: ExpenseUpdate):
     return expense_services.update_expense(user,expense_id,expense_data)
 
 
-@router.delete("/{expense_id}", response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
+@router.delete("/{expense_id:int}", response_model=ExpenseResponse, status_code=status.HTTP_200_OK)
 def delete__expense(user:user_dependency,expense_id: int):
     return expense_services.delete_expense(user,expense_id)
 
-@router.post("/{expense_id}/share", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+@router.post("/{expense_id:int}/share", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 def share__expense(user: user_dependency, expense_id: int, share_data: ShareExpenseRequest):
     return expense_services.share_expense(user, expense_id, share_data.target_user_id, share_data.relation)
 
-@router.delete("/{expense_id}/share/{target_user_id}", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+@router.delete("/{expense_id:int}/share/{target_user_id:int}", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 def unshare__expense(user: user_dependency, expense_id: int, target_user_id: int):
     return expense_services.unshare_expense(user, expense_id, target_user_id)
 

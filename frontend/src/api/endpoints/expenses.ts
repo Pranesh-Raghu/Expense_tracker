@@ -15,9 +15,10 @@ export interface ExpenseFilters {
 
 // The API supports only one filter dimension per call and no pagination -
 // combined filtering happens client-side over whichever single-filter
-// result is narrower. Trailing slashes below are load-bearing: without
-// them, e.g. `/expenses/categories` matches the `{expense_id}` route
-// instead and 422s.
+// result is narrower. The trailing slashes below aren't load-bearing
+// anymore - the backend's `{expense_id}` route is now int-typed
+// (controller/expense_controller.py), so it can't shadow these - but they
+// still match how the backend routes are declared, so leaving them.
 export function listExpenses(filters: ExpenseFilters = {}): Promise<Expense[]> {
   if (filters.category) {
     return apiFetch<Expense[]>(`/expenses/categories/${filters.category}`)

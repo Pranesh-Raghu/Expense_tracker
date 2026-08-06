@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 
-from geoip import city_for_ip
+from geoip import cities_for_ips
 from passlib.context import CryptContext
 
 from database import SessionLocal
@@ -217,11 +217,12 @@ def issue_access_token(*, user_id: int, client_id: str, scope: Optional[str], re
         "exp": int((now + ACCESS_TOKEN_TTL).timestamp()),
         "jti": secrets.token_urlsafe(16),
     }
-    return jwt.encode(claims, keys.get_signing_key_pem(), algorithm=ALGORITHM, headers={"kid": keys.KEY_ID})
+    return jwt.encode(claims, keys.get_signing_key_pem(), algorithm=ALGORITHM, headers={"kid": keys.get_current_kid()})
 
 
 def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str],
-                         user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> str:
+                         user_agent: Optional[str] = None, ip_address: Optional[str] = None,
+                         family_id: Optional[str] = None) -> str:
     token = secrets.token_urlsafe(48)
     now = _now()
     with SessionLocal() as db:
@@ -233,6 +234,10 @@ def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], r
             resource=resource,
             expires_at=now + REFRESH_TOKEN_TTL,
             revoked=False,
+            # A fresh login starts a new lineage; a rotation (see
+            # refresh_token_grant) passes the same family_id forward so
+            # reuse of any token in the chain can revoke the whole chain.
+            family_id=family_id or secrets.token_urlsafe(24),
             user_agent=user_agent,
             ip_address=ip_address,
             created_at=now,
@@ -243,11 +248,12 @@ def issue_refresh_token(*, user_id: int, client_id: str, scope: Optional[str], r
 
 
 def issue_token_pair(*, user_id: int, client_id: str, scope: Optional[str], resource: Optional[str],
-                      user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> dict:
+                      user_agent: Optional[str] = None, ip_address: Optional[str] = None,
+                      family_id: Optional[str] = None) -> dict:
     access_token = issue_access_token(user_id=user_id, client_id=client_id, scope=scope, resource=resource)
     refresh_token = issue_refresh_token(
         user_id=user_id, client_id=client_id, scope=scope, resource=resource,
-        user_agent=user_agent, ip_address=ip_address,
+        user_agent=user_agent, ip_address=ip_address, family_id=family_id,
     )
     logger.info("issued token pair: user_id=%s client_id=%s scope=%s ip=%s", user_id, client_id, scope, ip_address)
     return {
@@ -264,8 +270,29 @@ def refresh_token_grant(*, refresh_token: str, client_id: str,
     token_hash = _hash_token(refresh_token)
     with SessionLocal() as db:
         record = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
-        if not record or record.revoked:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: unknown or revoked refresh token")
+        if not record:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: unknown refresh token")
+        if record.revoked:
+            # This exact token was already rotated away once - a legitimate
+            # client never presents a token twice, so this is a replay of a
+            # stolen token, not routine expiry. Kill every other live token
+            # in the same lineage so the thief's next refresh also fails,
+            # instead of only rejecting this one request. (Older rows with
+            # no family_id predate this column - fall back to the narrower
+            # single-token rejection for those.)
+            if record.family_id:
+                revoked_count = (
+                    db.query(RefreshToken)
+                    .filter(RefreshToken.family_id == record.family_id, RefreshToken.revoked.is_(False))
+                    .update({"revoked": True})
+                )
+                db.commit()
+                if revoked_count:
+                    logger.warning(
+                        "refresh token reuse detected: revoked %d other token(s) in family_id=%s (user_id=%s)",
+                        revoked_count, record.family_id, record.user_id,
+                    )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: revoked refresh token")
         if record.expires_at < _now():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: refresh token expired")
         if record.client_id != client_id:
@@ -274,12 +301,12 @@ def refresh_token_grant(*, refresh_token: str, client_id: str,
         # Rotate: revoke the old refresh token so a captured, already-used
         # token can't be replayed after the legitimate client has rotated.
         record.revoked = True
-        user_id, scope, resource = record.user_id, record.scope, record.resource
+        user_id, scope, resource, family_id = record.user_id, record.scope, record.resource, record.family_id
         db.commit()
 
     return issue_token_pair(
         user_id=user_id, client_id=client_id, scope=scope, resource=resource,
-        user_agent=user_agent, ip_address=ip_address,
+        user_agent=user_agent, ip_address=ip_address, family_id=family_id,
     )
 
 
@@ -295,13 +322,16 @@ def list_sessions(user_id: int) -> list[dict]:
             .order_by(RefreshToken.last_used_at.desc())
             .all()
         )
+        # One batched lookup for every IP on the page instead of one HTTP
+        # call per session - see geoip.cities_for_ips().
+        cities = cities_for_ips(r.ip_address for r in records)
         return [
             {
                 "session_id": r.token_hash[:12],
                 "client_id": r.client_id,
                 "user_agent": r.user_agent,
                 "ip_address": r.ip_address,
-                "city": city_for_ip(r.ip_address),
+                "city": cities.get(r.ip_address),
                 "created_at": r.created_at,
                 "last_used_at": r.last_used_at,
             }
@@ -375,9 +405,28 @@ def is_web_session_revoked(jti: str) -> bool:
         return record is not None and record.revoked
 
 
+def _verification_key_for_token(access_token: str) -> bytes:
+    """Picks the public key matching the token's kid header, so a token
+    signed before a keys.rotate() call still verifies against its own
+    (now-retired) key instead of unconditionally against whatever the
+    current signing key happens to be."""
+    try:
+        kid = jwt.get_unverified_header(access_token).get("kid")
+    except JWTError:
+        kid = None
+    key_pem = keys.get_public_key_pem_for_kid(kid) if kid else None
+    # No kid, or a kid this instance doesn't recognize: fall back to the
+    # current key. That's exactly what tokens issued before rotation
+    # support existed look like, and it's harmless for a forged/unknown kid
+    # too - jwt.decode still rejects it on signature mismatch below.
+    return key_pem if key_pem is not None else keys.get_public_key_pem()
+
+
 def revoke_access_token(access_token: str) -> None:
     try:
-        claims = jwt.decode(access_token, keys.get_public_key_pem(), algorithms=[ALGORITHM], options={"verify_aud": False})
+        claims = jwt.decode(
+            access_token, _verification_key_for_token(access_token), algorithms=[ALGORITHM], options={"verify_aud": False}
+        )
     except JWTError:
         return
     with SessionLocal() as db:
@@ -393,7 +442,7 @@ def decode_access_token(access_token: str, *, expected_resource: Optional[str] =
     try:
         claims = jwt.decode(
             access_token,
-            keys.get_public_key_pem(),
+            _verification_key_for_token(access_token),
             algorithms=[ALGORITHM],
             audience=expected_resource or MCP_RESOURCE_URL,
             issuer=ISSUER,

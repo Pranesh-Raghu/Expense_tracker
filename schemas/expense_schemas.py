@@ -6,7 +6,7 @@ from models.expense_model import TransactionType, ExpenseCategory
 
 
 class ExpenseCreate(BaseModel):
-    amount: float
+    amount: float = Field(gt=0)
     category: ExpenseCategory
     transaction: TransactionType
     # When you spent the money, not when the row is created - defaults to

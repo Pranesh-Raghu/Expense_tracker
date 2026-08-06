@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ssrf_guard import is_public_hostname_async
+
 CACHE_TTL_SECONDS = 600
 MAX_DOCUMENT_BYTES = 64 * 1024
 FETCH_TIMEOUT_SECONDS = 5.0
@@ -37,19 +39,27 @@ def is_cimd_client_id(client_id: str) -> bool:
     return client_id.startswith("https://") or client_id.startswith("http://")
 
 
-def _validate_url(client_id: str, *, allow_insecure_http: bool) -> None:
+async def _validate_url(client_id: str, *, allow_insecure_http: bool) -> None:
+    """client_id is attacker-controlled and reachable from the unauthenticated
+    /oauth/authorize and /oauth/token endpoints - resolving it server-side a
+    few lines down without this check would let anyone point this server at
+    internal infrastructure (e.g. a cloud metadata endpoint) just by
+    registering a client_id URL whose hostname resolves there."""
     parsed = urlparse(client_id)
     if parsed.fragment:
         raise ValueError("client_id URL must not contain a fragment")
     if parsed.scheme == "https":
-        return
-    if parsed.scheme == "http" and allow_insecure_http:
+        if not await is_public_hostname_async(parsed.hostname):
+            raise ValueError("client_id URL must resolve to a public address")
+    elif parsed.scheme == "http" and allow_insecure_http:
         # allow_insecure_http is itself the explicit dev-only opt-in (see
-        # CIMD_ALLOW_INSECURE_HTTP in .env.example); it must never be set in
-        # a real deployment, so there's no extra safety in also restricting
-        # which hostnames it applies to.
-        return
-    raise ValueError("client_id URL must use https")
+        # CIMD_ALLOW_INSECURE_HTTP in .env.example) for testing CIMD clients
+        # served from http://localhost - it must never be set in a real
+        # deployment, so the public-host check below (which would otherwise
+        # reject localhost) doesn't apply here either.
+        pass
+    else:
+        raise ValueError("client_id URL must use https")
 
 
 async def resolve_cimd_client(client_id: str, *, allow_insecure_http: bool = False) -> dict:
@@ -59,7 +69,7 @@ async def resolve_cimd_client(client_id: str, *, allow_insecure_http: bool = Fal
     if cached and cached[0] > time.monotonic():
         return cached[1]
 
-    _validate_url(client_id, allow_insecure_http=allow_insecure_http)
+    await _validate_url(client_id, allow_insecure_http=allow_insecure_http)
 
     async with httpx.AsyncClient(timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=False) as client:
         response = await client.get(client_id, headers={"Accept": "application/json"})

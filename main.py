@@ -3,6 +3,8 @@ import os
 
 from fastapi import FastAPI , Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from controller import user_controller, expense_controller
 from database import engine, Base
 import auth
@@ -32,6 +34,41 @@ import oauth.models  # noqa: F401
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# create_all() only creates tables that don't exist yet - it never alters an
+# existing one, so a column added to a model after this app has already run
+# against a persisted DB volume needs to be brought in by hand. There's no
+# migration tool here, so this stays a short, idempotent list rather than a
+# growing pile of ad hoc ALTERs: each entry names the table/column it adds
+# and is a no-op (via the duplicate-column error) once already applied.
+_SCHEMA_PATCHES = [
+    ("oauth_refresh_tokens", "family_id", "ALTER TABLE oauth_refresh_tokens ADD COLUMN family_id VARCHAR(64) NULL"),
+]
+with engine.connect() as _conn:
+    for _table, _column, _ddl in _SCHEMA_PATCHES:
+        try:
+            _conn.execute(text(_ddl))
+            _conn.commit()
+            logger.info("schema patch applied: %s.%s", _table, _column)
+        except (OperationalError, ProgrammingError) as exc:
+            _conn.rollback()
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+# MODIFY COLUMN (unlike ADD COLUMN above) is naturally idempotent - re-running
+# it against a column that's already the target type is a no-op - so these
+# don't need the duplicate-column try/except dance and can just run every
+# startup. amount was FLOAT: MySQL sums FLOAT columns using the same
+# imprecise binary floating-point arithmetic Python's `float` uses, so
+# monthly/yearly report totals (func.sum(Expense.amount)) drifted by
+# fractions of a cent over enough rows. NUMERIC sums with exact fixed-point
+# arithmetic instead.
+try:
+    with engine.connect() as _conn:
+        _conn.execute(text("ALTER TABLE expenses MODIFY COLUMN amount NUMERIC(12, 2) NOT NULL"))
+        _conn.commit()
+except (OperationalError, ProgrammingError):
+    logger.exception("could not apply expenses.amount -> NUMERIC(12,2) schema patch")
 
 # Idempotent: finds-or-creates the OpenFGA store/model. Safe to call on
 # every startup, including against data left over from a previous run.

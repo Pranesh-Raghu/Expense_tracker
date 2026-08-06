@@ -16,6 +16,23 @@ def test_listing_requires_auth(base_url):
     assert resp.status_code == 401
 
 
+def test_listing_hides_email_from_non_admins(base_url):
+    username = unique("nonadmin-list")
+    other = unique("other-list")
+    create_user(base_url, username, "password123")
+    create_user(base_url, other, "password123")
+    token = rest_login(base_url, username, "password123")
+
+    # Every user needs id/username for the "share with" picker, but a
+    # non-admin should never see other users' email addresses.
+    resp = requests.get(f"{base_url}/users/", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    users = resp.json()
+    assert len(users) >= 2
+    assert all("username" in u and "id" in u for u in users)
+    assert all("email" not in u for u in users)
+
+
 def test_self_can_view_own_record_stranger_cannot(base_url):
     username = unique("self")
     stranger = unique("stranger")

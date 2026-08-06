@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 from models.user_model import User
 from oauth import cross_app_access, keys, service
 from oauth.schemas import ClientRegistrationRequest, ClientRegistrationResponse
+import rate_limit
 
 JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
@@ -177,10 +178,17 @@ async def token(
     client_id: str = Form(...),
     client_secret: str | None = Form(None),
 ):
+    ip_address = _client_ip(request)
+    # IP-keyed slows one attacker hammering many clients/refresh tokens;
+    # client-keyed slows guessing one client's secret or refresh tokens
+    # from many IPs. Checked before resolving the client so a throttled
+    # caller doesn't get a free client-secret comparison each time.
+    rate_limit.enforce(f"oauth-token:ip:{ip_address or 'unknown'}", max_attempts=30, window_seconds=300)
+    rate_limit.enforce(f"oauth-token:client:{client_id}", max_attempts=30, window_seconds=300)
+
     client = await service.resolve_client(client_id)
     service.verify_client_secret(client, client_secret)
     user_agent = request.headers.get("user-agent")
-    ip_address = _client_ip(request)
 
     if grant_type == "authorization_code":
         if not (code and redirect_uri and code_verifier):

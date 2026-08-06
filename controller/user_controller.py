@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 from services.user_services import update_user, get_user, get_users, delete_user, create_user, update_partial_user
-from schemas.user_schemas import UserCreate, UserUpdate, UserResponse, DeleteResponse
+from schemas.user_schemas import UserCreate, UserUpdate, UserResponse, UserPublic, DeleteResponse
 from auth import user_dependency
 from authz import service as authz
 router = APIRouter()
@@ -9,9 +9,15 @@ router = APIRouter()
 def create__user(user_data:UserCreate):
     return create_user(user_data)
 
-@router.get("/", response_model=list[UserResponse], status_code=status.HTTP_200_OK)
-def get__users(user: user_dependency):
-    return get_users()
+@router.get("/", status_code=status.HTTP_200_OK)
+def get__users(user: user_dependency) -> list[UserResponse] | list[UserPublic]:
+    # Every authenticated user needs this list for the "share with" picker
+    # (id + username + avatar), but only admins should see everyone's email -
+    # shape the response by privilege instead of gating the whole endpoint.
+    users = get_users()
+    if authz.is_admin(user['id']):
+        return [UserResponse.model_validate(u) for u in users]
+    return [UserPublic.model_validate(u) for u in users]
 
 @router.get("/{user_id}", response_model=UserResponse, status_code=status.HTTP_200_OK)
 def get__user(user_id: int, user: user_dependency):

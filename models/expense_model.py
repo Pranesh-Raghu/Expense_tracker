@@ -1,4 +1,6 @@
-from sqlalchemy import Integer, Float, ForeignKey, DateTime, Enum, func
+from decimal import Decimal
+
+from sqlalchemy import Integer, Numeric, ForeignKey, DateTime, Enum, func
 from sqlalchemy.orm import   Mapped, mapped_column
 from datetime import datetime, timedelta
 from database import Base, SessionLocal
@@ -10,7 +12,11 @@ class Expense(Base):
     __tablename__ = "expenses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    amount: Mapped[float] = mapped_column(Float)
+    # NUMERIC, not FLOAT: MySQL sums a FLOAT column with the same imprecise
+    # binary floating-point arithmetic Python's `float` uses, so
+    # func.sum(Expense.amount) in the monthly/yearly report queries below
+    # drifted by fractions of a cent over enough rows. NUMERIC sums exactly.
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     category: Mapped[ExpenseCategory] = mapped_column(Enum(ExpenseCategory), default=ExpenseCategory.FOOD, nullable=False)
     transaction: Mapped[TransactionType] = mapped_column(Enum(TransactionType), default=TransactionType.CREDIT, nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -43,12 +49,13 @@ class Expense(Base):
     @staticmethod
     def create_expense(user: user_dependency,expense_data):
         with SessionLocal() as db:
-         try:    
-             last_expense = db.query(Expense).order_by(Expense.id.desc()).first()
-             new_id = last_expense.id + 1 if last_expense else 1 
- 
-             expense = Expense(id = new_id,
-                              amount = expense_data.amount,
+         try:
+             # `id` is an autoincrement primary key - the DB assigns it.
+             # This used to compute id manually as "highest existing id + 1",
+             # which raced under concurrent creates (two requests reading
+             # the same max id before either commits both try to insert the
+             # same id, and the second fails with an unhandled 500).
+             expense = Expense(amount = expense_data.amount,
                               category= expense_data.category,
                               transaction = expense_data.transaction,
                               time = expense_data.time or datetime.now(),
@@ -58,7 +65,7 @@ class Expense(Base):
              db.commit()
              db.refresh(expense)
              return expense
-        
+
          except Exception as e:
              db.rollback()
              raise e
@@ -162,13 +169,17 @@ class Expense(Base):
     @staticmethod
     def get_expenses_by_category(user: user_dependency,category: str):
         with SessionLocal() as db:
-            expenses = db.query(Expense).filter(Expense.category == category).all()
+            expenses = db.query(Expense).filter(
+                Expense.category == category, Expense.user_id == user.get('id')
+            ).all()
         return expenses if expenses else []
-     
+
     @staticmethod
     def get_expenses_by_transaction(user: user_dependency,transaction: str):
         with SessionLocal() as db:
-            expenses = db.query(Expense).filter(Expense.transaction == transaction).all()
+            expenses = db.query(Expense).filter(
+                Expense.transaction == transaction, Expense.user_id == user.get('id')
+            ).all()
         return expenses if expenses else []
     
     
@@ -197,12 +208,16 @@ class Expense(Base):
         end_date = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
 
         with SessionLocal() as db:
-            total = db.query(func.sum(Expense.amount)).filter(
+            # func.sum() over a NUMERIC column comes back as Decimal, not
+            # float - cast explicitly rather than relying on every caller
+            # (REST via pydantic, or MCP tools returning this dict as-is)
+            # to coerce it before JSON-serializing.
+            total = float(db.query(func.sum(Expense.amount)).filter(
                 Expense.time >= start_date,
                 Expense.time < end_date,
-                Expense.user_id == user.get('id')  
-            ).scalar() or 0  
-    
+                Expense.user_id == user.get('id')
+            ).scalar() or 0)
+
             return {
             "month": month,
             "year": year,
@@ -217,12 +232,12 @@ class Expense(Base):
         end_date = datetime(year + 1, 1, 1)
         
         with SessionLocal() as db:
-            total = db.query(func.sum(Expense.amount)).filter(
+            total = float(db.query(func.sum(Expense.amount)).filter(
                 Expense.time >= start_date,
                 Expense.time < end_date,
                 Expense.user_id == user.get('id')
-            ).scalar() or 0
-            
+            ).scalar() or 0)
+
             return{
                 "year": year,
                 "total_expense": total
@@ -235,12 +250,12 @@ class Expense(Base):
         end_date = start_date + timedelta(days=1)  
         
         with SessionLocal() as db:
-            total = db.query(func.sum(Expense.amount)).filter(
+            total = float(db.query(func.sum(Expense.amount)).filter(
                 Expense.time >= start_date,
                 Expense.time < end_date,
                 Expense.user_id == user.get('id')
-            ).scalar() or 0
-            
+            ).scalar() or 0)
+
             return{
                 "year": year,
                 "month": month,
@@ -255,11 +270,11 @@ class Expense(Base):
         start_of_week = current_date - timedelta(days=current_date.weekday())
 
         with SessionLocal() as db:
-            total = db.query(func.sum(Expense.amount)).filter(
+            total = float(db.query(func.sum(Expense.amount)).filter(
                 Expense.time >= start_of_week,
                 Expense.time <= current_date,
                 Expense.user_id == user.get('id')
-            ).scalar() or 0
+            ).scalar() or 0)
 
             return {
                 "year": year,

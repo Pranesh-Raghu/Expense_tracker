@@ -1,7 +1,6 @@
 from fastapi import HTTPException
 from models.expense_model import Expense,ExpenseCategory, TransactionType, user_dependency
 from schemas.expense_schemas import ExpenseCreate, ExpenseUpdate, ExpensePermissions
-from services.expense_services import user_dependency  # noqa: F811
 from validators.expense_validators import date_month_year_validator, month_year_validator,year_validator,user_validator,expense_id_validator
 from authz import service as authz
 import webhooks
@@ -11,12 +10,31 @@ def _attach_permissions(user_id: int, expense):
     # ExpenseResponse requires `permissions`, but it isn't a column on the
     # Expense model - compute it from authz and hang it off the instance so
     # response_model serialization picks it up like any other attribute.
+    # Only for single-expense paths (create/update/delete/get-by-id) - a
+    # list of N expenses uses _attach_permissions_bulk instead, since this
+    # does 3 OpenFGA round trips per call.
     expense.permissions = ExpensePermissions(
         can_edit=authz.can_edit(user_id, expense.id),
         can_delete=authz.can_delete(user_id, expense.id),
         can_share=authz.can_share(user_id, expense.id),
     )
     return expense
+
+
+def _attach_permissions_bulk(user_id: int, expenses):
+    # Same result as calling _attach_permissions on every item, but 3
+    # OpenFGA round trips total instead of 3 per expense - see
+    # authz.bulk_expense_permissions. Listing a page of expenses shouldn't
+    # cost O(N) network calls just to render each row's edit/delete/share
+    # buttons.
+    permission_sets = authz.bulk_expense_permissions(user_id)
+    for expense in expenses:
+        expense.permissions = ExpensePermissions(
+            can_edit=expense.id in permission_sets["can_edit"],
+            can_delete=expense.id in permission_sets["can_delete"],
+            can_share=expense.id in permission_sets["can_share"],
+        )
+    return expenses
 
 
 # Create Expense
@@ -43,7 +61,7 @@ def get_all_expenses(user:user_dependency):
 
     expenses = Expense.get_expenses_by_ids(expense_ids)
 
-    return [_attach_permissions(user.get('id'), e) for e in expenses]
+    return _attach_permissions_bulk(user.get('id'), expenses)
 
 
 def get_expense_by_id(user: user_dependency,expense_id: int):
@@ -144,119 +162,78 @@ def expense_transaction_types(user:user_dependency):
 
 
 def get_monthly_reports(user:user_dependency,month,year):
-    
+
     user_validator(user)
-    
+
     month_year_validator(month,year)
-    
-    report = Expense.get_monthly_reports(user,month,year)
-    
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
-    return report
+
+    # Never None - always a (possibly empty) list for a month with no
+    # expenses, which is a normal 200 response, not a 404.
+    return Expense.get_monthly_reports(user,month,year)
 
 def get_yearly_reports(user:user_dependency,year):
-    
+
     user_validator(user)
-    
+
     year_validator(year)
-    
-    report = Expense.get_yearly_reports(user,year)
-    
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
-    return report
+
+    return Expense.get_yearly_reports(user,year)
 
 def get_expenses_by_category(user: user_dependency,category):
-    
+
     user_validator(user)
-        
-    if category is None:
-        raise HTTPException(status_code=400, detail="Category is requird.")
-    
-    expenses = Expense.get_expenses_by_category(user,category)
-    
-    if expenses is None:
-        raise HTTPException(status_code=404, detail="Category not found")
-    
-    return expenses
+
+    if category not in ExpenseCategory.__members__:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+
+    return Expense.get_expenses_by_category(user,category)
 
 def get_expenses_by_transaction(user: user_dependency,transaction):
-    
+
     user_validator(user)
-             
-    if transaction is None:
-        raise HTTPException(status_code=400, detail="Transaction is requird.")        
-    
-    expenses = Expense.get_expenses_by_transaction(user,transaction)
-    
-    if expenses is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    return expenses
+
+    if transaction not in TransactionType.__members__:
+        raise HTTPException(status_code=400, detail=f"Unknown transaction type: {transaction}")
+
+    return Expense.get_expenses_by_transaction(user,transaction)
 
 def get_monthly_amount(user:user_dependency,month,year):
     user_validator(user)
-     
-    month_year_validator(month,year) 
 
-    report = Expense.get_monthly_amount(user,month,year)
-    
-    if report is None:
-        raise HTTPException(status_code=404, detail="Amount not found")
-    
-    return report
+    month_year_validator(month,year)
+
+    return Expense.get_monthly_amount(user,month,year)
 
 def get_yearly_amount(user: user_dependency,year):
     user_validator(user)
-    
+
     year_validator(year)
-    
-    amount = Expense.get_yearly_amount(user,year)
-    
-    if amount is None:
-        raise HTTPException(status_code=404, detail="Amount not found")
-    
-    return amount
+
+    return Expense.get_yearly_amount(user,year)
 
 
 def get_daily_amount(user:user_dependency,year,month,date):
         user_validator(user)
-        
+
         date_month_year_validator(date,month,year)
-        
-        report = Expense.get_daily_amount(user,year,month,date)
-    
-        if report is None:
-          raise HTTPException(status_code=404, detail="Amount not found")
-    
-        return report
+
+        return Expense.get_daily_amount(user,year,month,date)
 
 def get_daily_reports(user:user_dependency, day,month,year):
-    
+
     user_validator(user)
-    
+
     date_month_year_validator(day,month,year)
-    
-    report = Expense.get_daily_reports(user,day,month,year)
-    
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
-    return report
+
+    return Expense.get_daily_reports(user,day,month,year)
 
 def get_weekly_reports(user:user_dependency, day,month,year):
-    
+
+    user_validator(user)
+
     date_month_year_validator(day,month,year)
-    
-    report = Expense.get_weekly_report(user,day,month,year)
-    
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
-    return report
+
+    return Expense.get_weekly_report(user,day,month,year)
 
 
 def get_weekly_amount(user: user_dependency,year,month,date):

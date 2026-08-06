@@ -2,10 +2,12 @@ import re
 import secrets
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlalchemy import Column, Integer, String,Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from database import Base, SessionLocal
 from passlib.context import CryptContext
+from validators.user_validators import validate_password_strength
 
 
 
@@ -129,14 +131,31 @@ class User(Base):
         
          return user
 
+    # Only these columns are safe for a caller-supplied dict to touch. A raw
+    # setattr(user, key, value) loop over an arbitrary dict would let a
+    # caller overwrite `password` with a plaintext string (bypassing
+    # pwd_context.hash entirely and locking the target out) or set columns
+    # like `id` that were never meant to be client-writable.
+    PARTIAL_UPDATE_FIELDS = {"username", "email", "password"}
+
     @staticmethod
     def update_partial_user(user_id: int, user_data):
         with SessionLocal() as db:
-            
-         user = db.query(User).filter(User.id == user_id).first()   
-         
+
+         user = db.query(User).filter(User.id == user_id).first()
+         if not user:
+             return None
+
          for key, value in user_data.items():
-           setattr(user, key, value)  
+           if key not in User.PARTIAL_UPDATE_FIELDS:
+               continue
+           if key == "password":
+               try:
+                   value = validate_password_strength(value)
+               except ValueError as exc:
+                   raise HTTPException(status_code=422, detail=str(exc)) from exc
+               value = pwd_context.hash(value)
+           setattr(user, key, value)
 
          db.commit()
          db.refresh(user)

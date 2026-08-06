@@ -85,7 +85,10 @@ def add_expense(amount: float, category: str, transaction: str) -> dict:
     values returned by list_categories / list_transaction_types."""
     _require_scope("expenses:write")
     user = _current_user()
-    payload = ExpenseCreate(amount=amount, category=category, transaction=transaction, user_id=user["id"])
+    # Ownership comes from `user`, passed separately to create_expense below -
+    # ExpenseCreate has no user_id field, so a user_id kwarg here would be
+    # silently dropped by pydantic rather than doing anything.
+    payload = ExpenseCreate(amount=amount, category=category, transaction=transaction)
     return _serialize(expense_services.create_expense(user, payload))
 
 

@@ -59,6 +59,15 @@ class RefreshToken(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked = Column(Boolean, default=False)
 
+    # Shared by every refresh token in one rotation lineage: the token
+    # issued at login, and every token it rotates into afterward. Lets
+    # refresh_token_grant() revoke a whole stolen lineage in one go when it
+    # detects reuse, instead of only rejecting the single replayed request.
+    # Nullable so rows written before this column existed keep working -
+    # they just fall back to single-token revocation on reuse, not
+    # family-wide (see refresh_token_grant).
+    family_id = Column(String(64), nullable=True, index=True)
+
     # Session/device metadata, captured at issuance time from the request
     # that hit /oauth/token or /auth/token - lets a user see (and kill) each
     # of their logged-in devices individually, same idea as "active

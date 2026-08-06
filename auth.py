@@ -7,17 +7,21 @@ from datetime import datetime, timedelta, timezone
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 from typing import Annotated
+from urllib.parse import urlparse
 from passlib.context import CryptContext  # pyright: ignore[reportMissingModuleSource]
 from models.user_model import User
 from schemas.user_schemas import Token
 from avatar import gravatar_url_strict
 from oauth import service as oauth_service
+from oauth import keys as oauth_keys
 from oauth.schemas import (
     ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyInfo, TrustedIssuerCreateRequest, TrustedIssuerInfo,
     SessionInfo, WebhookCreateRequest, WebhookCreateResponse, WebhookInfo,
     PasswordlessRequestRequest, PasswordlessRequestResponse, PasswordlessVerifyRequest,
 )
 from authz import service as authz
+from ssrf_guard import is_public_hostname
+import rate_limit
 import google_oauth
 import webhooks
 import json
@@ -30,7 +34,40 @@ logger = logging.getLogger("expense_tracker.auth")
 router = APIRouter()
 
 
-SECRET_KEY = os.environ.get('REST_JWT_SECRET_KEY', 'dev-only-insecure-secret-change-me')
+def _load_or_create_secret_key() -> str:
+    """REST_JWT_SECRET_KEY signs the web-login JWT (password/Google/
+    passwordless). A hardcoded fallback here would be checked into this
+    public repo - anyone who reads the source could forge a valid login
+    token for any user_id without ever authenticating. Prefer an explicit
+    env var; otherwise generate one and persist it next to the OAuth RSA
+    keys (oauth/keys.py uses the same OAUTH_KEY_DIR volume) so it survives
+    container restarts instead of silently rotating - and invalidating
+    every session - on every deploy."""
+    env_value = os.environ.get('REST_JWT_SECRET_KEY')
+    if env_value:
+        return env_value
+
+    key_dir = os.environ.get("OAUTH_KEY_DIR", os.path.join(os.path.dirname(__file__), "keys"))
+    secret_path = os.path.join(key_dir, "rest_jwt_secret")
+    if os.path.exists(secret_path):
+        with open(secret_path) as f:
+            return f.read().strip()
+
+    os.makedirs(key_dir, exist_ok=True)
+    generated = secrets.token_urlsafe(48)
+    try:
+        fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(generated)
+        return generated
+    except FileExistsError:
+        # Lost the race with another worker process starting concurrently -
+        # whoever won already wrote a value, so use that instead.
+        with open(secret_path) as f:
+            return f.read().strip()
+
+
+SECRET_KEY = _load_or_create_secret_key()
 ALGORITHM = 'HS256'
 
 
@@ -112,6 +149,13 @@ def _issue_and_record(request: Request, user) -> str:
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(request: Request, form_data: Annotated[OAuth2PasswordRequestForm,Depends()]):
+    # Two keys, not one: an IP-keyed limit slows one attacker guessing many
+    # usernames; a username-keyed limit slows credential-stuffing the same
+    # account from many IPs. Checked before the password check itself so a
+    # throttled caller doesn't get a free bcrypt comparison each time.
+    client_ip = _client_ip(request) or "unknown"
+    rate_limit.enforce(f"login:ip:{client_ip}", max_attempts=20, window_seconds=300)
+    rate_limit.enforce(f"login:user:{form_data.username}", max_attempts=10, window_seconds=300)
 
     user = User.authenticate_user(form_data.username, form_data.password)
 
@@ -161,7 +205,11 @@ def google_callback(request: Request, code: str, state: str):
 
 
 @router.post("/passwordless/request", response_model=PasswordlessRequestResponse)
-def request_passwordless_login(payload: PasswordlessRequestRequest):
+def request_passwordless_login(request: Request, payload: PasswordlessRequestRequest):
+    client_ip = _client_ip(request) or "unknown"
+    rate_limit.enforce(f"passwordless-request:ip:{client_ip}", max_attempts=10, window_seconds=300)
+    rate_limit.enforce(f"passwordless-request:user:{payload.username}", max_attempts=5, window_seconds=300)
+
     user = User.get_users()
     matched = next((u for u in user if u.username == payload.username), None)
     # Same response whether the username exists or not - a different
@@ -175,6 +223,9 @@ def request_passwordless_login(payload: PasswordlessRequestRequest):
 
 @router.post("/passwordless/verify", response_model=Token)
 def verify_passwordless_login(request: Request, payload: PasswordlessVerifyRequest):
+    client_ip = _client_ip(request) or "unknown"
+    rate_limit.enforce(f"passwordless-verify:ip:{client_ip}", max_attempts=20, window_seconds=300)
+
     user_id = oauth_service.verify_passwordless_login(payload.token)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired login link')
@@ -207,6 +258,12 @@ def create_webhook(payload: WebhookCreateRequest, user: user_dependency):
     _dev_hosts = ("http://localhost", "http://127.0.0.1", "http://host.docker.internal")
     if not (payload.url.startswith("https://") or payload.url.startswith(_dev_hosts)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='webhook url must be https (or localhost/host.docker.internal for dev)')
+    if payload.url.startswith("https://") and not is_public_hostname(urlparse(payload.url).hostname):
+        # An admin account is more trusted than an arbitrary CIMD client_id,
+        # but a compromised/phished admin token shouldn't turn into a free
+        # pivot into internal infrastructure via a webhook URL that resolves
+        # there - see ssrf_guard.py.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='webhook url must resolve to a public address')
     secret = secrets.token_urlsafe(32)
     with SessionLocal() as db:
         row = WebhookEndpoint(
@@ -297,6 +354,19 @@ def revoke_admin(target_user_id: int, user: user_dependency):
     if not authz.is_admin(user['id']):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an existing admin can revoke admin')
     authz.revoke_admin(target_user_id)
+
+
+@router.post("/admin/rotate-signing-key", status_code=status.HTTP_200_OK)
+def rotate_signing_key(user: user_dependency):
+    """Rotates the RSA key this server signs access tokens with - e.g.
+    after a suspected key compromise. The retired key stays published in
+    the JWKS (see oauth/keys.py), so access tokens already issued keep
+    verifying until they expire naturally; nothing is revoked early."""
+    if not authz.is_admin(user['id']):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only an admin can rotate the signing key')
+    new_kid = oauth_keys.rotate()
+    logger.warning("signing key rotated by user_id=%s new_kid=%s", user['id'], new_kid)
+    return {"kid": new_kid}
 
 
 @router.get("/trusted-issuers", response_model=list[TrustedIssuerInfo])
