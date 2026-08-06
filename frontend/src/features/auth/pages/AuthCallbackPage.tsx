@@ -9,7 +9,7 @@ import { AuthLayout } from '../components/AuthLayout'
 // back with a freshly-minted JWT as a query param - picks it up and hands
 // off to the normal auth state, same shape as a password login from here.
 export function AuthCallbackPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { loginWithToken } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
@@ -20,6 +20,13 @@ export function AuthCallbackPage() {
     ranOnce.current = true
 
     const token = searchParams.get('token')
+    // Strip the token from the URL right away, before the async
+    // loginWithToken call below - a failed sign-in must not leave the JWT
+    // sitting in the address bar/browser history either. The success path
+    // navigates away entirely a moment later; this covers the error path,
+    // which used to leave it there indefinitely.
+    setSearchParams({}, { replace: true })
+
     if (!token) {
       setError('No token in callback URL')
       return
@@ -28,7 +35,7 @@ export function AuthCallbackPage() {
     loginWithToken(token)
       .then(() => navigate('/', { replace: true }))
       .catch(() => setError('Could not complete sign-in'))
-  }, [searchParams, loginWithToken, navigate])
+  }, [searchParams, setSearchParams, loginWithToken, navigate])
 
   return (
     <AuthLayout title="Signing you in…">
