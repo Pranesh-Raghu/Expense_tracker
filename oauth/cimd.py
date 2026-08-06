@@ -21,6 +21,7 @@ server it talks to.
 """
 
 import time
+from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -32,7 +33,14 @@ CACHE_TTL_SECONDS = 600
 MAX_DOCUMENT_BYTES = 64 * 1024
 FETCH_TIMEOUT_SECONDS = 5.0
 
-_cache: dict[str, tuple[float, dict]] = {}
+# client_id is attacker-controlled and reachable from the unauthenticated
+# /oauth/authorize and /oauth/token endpoints - a plain dict here would let
+# anyone grow this without bound just by hosting enough distinct,
+# individually-valid CIMD documents (each one a successful resolution ends
+# up cached below). Bounded + LRU-evicted instead, same idea as geoip.py's
+# cache.
+MAX_CACHE_SIZE = 10_000
+_cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
 
 
 def is_cimd_client_id(client_id: str) -> bool:
@@ -67,6 +75,7 @@ async def resolve_cimd_client(client_id: str, *, allow_insecure_http: bool = Fal
 
     cached = _cache.get(client_id)
     if cached and cached[0] > time.monotonic():
+        _cache.move_to_end(client_id)
         return cached[1]
 
     await _validate_url(client_id, allow_insecure_http=allow_insecure_http)
@@ -95,11 +104,15 @@ async def resolve_cimd_client(client_id: str, *, allow_insecure_http: bool = Fal
     metadata.setdefault("response_types", ["code"])
 
     _cache[client_id] = (time.monotonic() + CACHE_TTL_SECONDS, metadata)
+    _cache.move_to_end(client_id)
+    while len(_cache) > MAX_CACHE_SIZE:
+        _cache.popitem(last=False)  # evict least-recently-used
     return metadata
 
 
 def get_cached_cimd_client(client_id: str) -> Optional[dict]:
     cached = _cache.get(client_id)
     if cached and cached[0] > time.monotonic():
+        _cache.move_to_end(client_id)
         return cached[1]
     return None
