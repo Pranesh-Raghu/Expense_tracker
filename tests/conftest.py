@@ -38,7 +38,14 @@ def base_url() -> str:
 
 
 def create_user(base_url: str, username: str, password: str) -> int:
-    resp = requests.post(f"{base_url}/users/", json={"username": username, "password": password})
+    # Signup only takes email + password (see schemas/user_schemas.py) -
+    # the username is generated server-side from the email's local part
+    # (User.generate_username_from_email). `unique()` below already only
+    # produces lowercase letters/digits/underscore, so the derived username
+    # comes back out exactly equal to the `username` this helper was given -
+    # every caller's rest_login(base_url, username, password) still works
+    # unmodified.
+    resp = requests.post(f"{base_url}/users/", json={"email": f"{username}@example.com", "password": password})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 

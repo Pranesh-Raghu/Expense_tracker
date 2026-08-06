@@ -6,7 +6,7 @@ from tests.conftest import create_user, rest_login, unique
 def test_registration_stays_public(base_url):
     resp = requests.post(
         f"{base_url}/users/",
-        json={"username": unique("public"), "password": "password123"},
+        json={"email": f"{unique('public')}@example.com", "password": "password123"},
     )
     assert resp.status_code == 201
 
