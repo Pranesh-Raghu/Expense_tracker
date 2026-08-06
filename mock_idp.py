@@ -17,12 +17,13 @@ this module entirely.
 import os
 import time
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from jose import jwt
 from pydantic import BaseModel
 
 from models.user_model import User
 from oauth.keys import SigningKeySet
+import rate_limit
 
 router = APIRouter()
 
@@ -51,8 +52,26 @@ class MockIdpLoginResponse(BaseModel):
     token_type: str = "urn:ietf:params:oauth:token-type:jwt"
 
 
+def _client_ip(request: Request) -> str | None:
+    # Same logic as auth.py's and oauth/router.py's versions of this helper.
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
 @router.post("/login", response_model=MockIdpLoginResponse)
-def mock_idp_login(payload: MockIdpLoginRequest):
+def mock_idp_login(request: Request, payload: MockIdpLoginRequest):
+    # This does a real password check (authenticate_user below) - without
+    # rate limiting it'd be an unthrottled oracle for the exact same
+    # passwords /auth/token protects, just reached through a different
+    # route. Same two keys as /auth/token: IP-keyed slows one attacker
+    # guessing many usernames, username-keyed slows credential-stuffing one
+    # account from many IPs.
+    client_ip = _client_ip(request) or "unknown"
+    rate_limit.enforce(f"mock-idp-login:ip:{client_ip}", max_attempts=20, window_seconds=300)
+    rate_limit.enforce(f"mock-idp-login:user:{payload.username}", max_attempts=10, window_seconds=300)
+
     user = User.authenticate_user(payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid username or password")
