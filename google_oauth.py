@@ -36,6 +36,14 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 STATE_TTL_SECONDS = 600
 
+# TTL pruning below bounds how long any one entry lives, but not how many
+# can pile up within that window - /auth/google/login takes no input, needs
+# no auth, and isn't rate-limited, so a burst of calls within
+# STATE_TTL_SECONDS could otherwise grow this without bound. This caps it
+# too: build_authorize_url evicts the oldest entry (dicts preserve
+# insertion order, so this is a plain FIFO) once over the limit.
+MAX_PENDING_STATES = 10_000
+
 # state -> issued_at. Single-instance only - a multi-instance deployment
 # would need this in a shared store (Redis, DB) instead, same caveat as
 # oauth/service.py's in-process bits.
@@ -53,6 +61,9 @@ def build_authorize_url() -> tuple[str, str]:
     _prune_expired_states()
     state = secrets.token_urlsafe(24)
     _pending_states[state] = time.time()
+    while len(_pending_states) > MAX_PENDING_STATES:
+        oldest = next(iter(_pending_states))
+        _pending_states.pop(oldest, None)
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
