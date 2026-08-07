@@ -23,6 +23,32 @@ def test_duplicate_email_signup_is_rejected_not_a_500(base_url):
     assert second.status_code == 409
 
 
+def test_signup_rejects_email_differing_only_in_case(base_url):
+    # MySQL (local dev) folds case for uniqueness by default; Postgres
+    # (production) doesn't - relying on DB collation for this would make it
+    # pass here and silently create a duplicate account in production.
+    base = unique("casing")
+    first = requests.post(f"{base_url}/users/", json={"email": f"{base}@example.com", "password": "password123"})
+    assert first.status_code == 201
+
+    second = requests.post(
+        f"{base_url}/users/", json={"email": f"{base.upper()}@EXAMPLE.COM", "password": "password456"}
+    )
+    assert second.status_code == 409
+
+
+def test_login_works_regardless_of_email_case(base_url):
+    base = unique("mixedcase")
+    email = f"{base}@Example.com"
+    resp = requests.post(f"{base_url}/users/", json={"email": email, "password": "password123"})
+    assert resp.status_code == 201
+
+    # Logging in with a different case than used at signup must still work -
+    # same reasoning as the signup test above.
+    login = requests.post(f"{base_url}/auth/token", data={"username": email.upper(), "password": "password123"})
+    assert login.status_code == 200
+
+
 def test_listing_requires_auth(base_url):
     resp = requests.get(f"{base_url}/users/")
     assert resp.status_code == 401

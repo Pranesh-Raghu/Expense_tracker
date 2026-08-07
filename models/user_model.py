@@ -59,6 +59,17 @@ class User(Base):
     @staticmethod
     def create_user(user_credentials):
 
+        # Normalized once, here, rather than relying on the database to
+        # fold case for us: MySQL's default collation compares
+        # "Alice@x.com" and "alice@x.com" as equal, but Postgres's doesn't -
+        # this app runs MySQL in local dev and Postgres in production, so a
+        # duplicate-email check (and login, see authenticate_user) that
+        # depended on DB collation behaved differently in each, and on
+        # Postgres specifically let two accounts differing only in email
+        # case exist at once, or locked a user out of login if they typed
+        # a different case than they signed up with.
+        email = user_credentials.email.lower()
+
         with SessionLocal() as db:
            # `id` is an autoincrement primary key - the DB assigns it.
            # Computing it manually as "highest existing id + 1" (the old
@@ -67,10 +78,10 @@ class User(Base):
            # insert then fails with an unhandled 500 instead of a clean
            # signup. Same class of bug already fixed for Expense.create_expense.
            for attempt in range(1, User.MAX_CREATE_ATTEMPTS + 1):
-               username = User.generate_username_from_email(user_credentials.email, db)
+               username = User.generate_username_from_email(email, db)
                hashed_password = pwd_context.hash(user_credentials.password)
                db_user = User(username = username,
-                              email = user_credentials.email,
+                              email = email,
                               password = hashed_password,
                               )
                db.add(db_user)
@@ -85,7 +96,7 @@ class User(Base):
                    # moment ago, but one does now - ours or a concurrent
                    # one, doesn't matter which). Otherwise it's the username
                    # collision above, worth retrying.
-                   if db.query(User).filter(User.email == user_credentials.email).first():
+                   if db.query(User).filter(User.email == email).first():
                        raise HTTPException(status_code=409, detail="A user with that email already exists.")
                    if attempt < User.MAX_CREATE_ATTEMPTS:
                        continue
@@ -104,6 +115,10 @@ class User(Base):
         `picture_url` (Google's OAuth `picture` claim) is refreshed on
         every login, in case the user's Google photo changed since last
         time."""
+        # Normalized for the same reason as create_user - don't rely on the
+        # database's collation to fold case for us, since MySQL (local dev)
+        # and Postgres (production) don't agree on that.
+        email = email.lower()
         with SessionLocal() as db:
             existing = db.query(User).filter(User.email == email).first()
             if existing:
@@ -162,7 +177,10 @@ class User(Base):
          if 'username' in user_credentials:
             user.username = user_credentials['username']
          if 'email' in user_credentials:
-            user.email = user_credentials['email']
+            # Same normalization as create_user - not doing this here would
+            # let an update introduce exactly the case-mismatch inconsistency
+            # that fix closes for signup.
+            user.email = user_credentials['email'].lower()
          if 'password' in user_credentials:
             user.password = pwd_context.hash(user_credentials['password'])
             
@@ -195,6 +213,9 @@ class User(Base):
                except ValueError as exc:
                    raise HTTPException(status_code=422, detail=str(exc)) from exc
                value = pwd_context.hash(value)
+           elif key == "email":
+               # Same normalization as create_user/update_user.
+               value = value.lower()
            setattr(user, key, value)
 
          db.commit()
@@ -219,6 +240,13 @@ class User(Base):
         """`identifier` may be a username or an email - since signup only
         ever shows the user their email (the username is generated and
         never surfaced), login has to accept either."""
+        # Lowercasing the whole identifier is safe for both cases: a
+        # username is already all-lowercase by construction
+        # (generate_username_from_email), and an email needs it for the
+        # same collation-independence reason as create_user - without this,
+        # whether "Alice@x.com" can log back in as "alice@x.com" depended
+        # on which database was running underneath (MySQL: yes: Postgres: no).
+        identifier = identifier.lower()
         with SessionLocal() as db:
             user = (
                 db.query(User)
