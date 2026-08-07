@@ -39,36 +39,62 @@ Base.metadata.create_all(bind=engine)
 # existing one, so a column added to a model after this app has already run
 # against a persisted DB volume needs to be brought in by hand. There's no
 # migration tool here, so this stays a short, idempotent list rather than a
-# growing pile of ad hoc ALTERs: each entry names the table/column it adds
-# and is a no-op (via the duplicate-column error) once already applied.
+# growing pile of ad hoc ALTERs.
+#
+# This app runs against MySQL in local dev (docker-compose.yml) and Postgres
+# in production (Render) - checking information_schema directly, rather
+# than trying to run the ALTER and pattern-match the driver's "already
+# exists" error message, is what actually works on both: MySQL's message is
+# "Duplicate column name 'x'", psycopg2's is "column \"x\" ... already
+# exists" (no "duplicate column" substring at all) - relying on the
+# MySQL-shaped message crashed this app at import time in production every
+# time, since the unmatched error was re-raised.
+def _column_exists(table: str, column: str) -> bool:
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        )
+        return result.first() is not None
+
+
 _SCHEMA_PATCHES = [
     ("oauth_refresh_tokens", "family_id", "ALTER TABLE oauth_refresh_tokens ADD COLUMN family_id VARCHAR(64) NULL"),
 ]
-with engine.connect() as _conn:
-    for _table, _column, _ddl in _SCHEMA_PATCHES:
-        try:
-            _conn.execute(text(_ddl))
-            _conn.commit()
-            logger.info("schema patch applied: %s.%s", _table, _column)
-        except (OperationalError, ProgrammingError) as exc:
-            _conn.rollback()
-            if "duplicate column" not in str(exc).lower():
-                raise
-
-# MODIFY COLUMN (unlike ADD COLUMN above) is naturally idempotent - re-running
-# it against a column that's already the target type is a no-op - so these
-# don't need the duplicate-column try/except dance and can just run every
-# startup. amount was FLOAT: MySQL sums FLOAT columns using the same
-# imprecise binary floating-point arithmetic Python's `float` uses, so
-# monthly/yearly report totals (func.sum(Expense.amount)) drifted by
-# fractions of a cent over enough rows. NUMERIC sums with exact fixed-point
-# arithmetic instead.
-try:
+for _table, _column, _ddl in _SCHEMA_PATCHES:
+    if _column_exists(_table, _column):
+        logger.info("schema patch already applied: %s.%s", _table, _column)
+        continue
     with engine.connect() as _conn:
-        _conn.execute(text("ALTER TABLE expenses MODIFY COLUMN amount NUMERIC(12, 2) NOT NULL"))
+        _conn.execute(text(_ddl))
         _conn.commit()
-except (OperationalError, ProgrammingError):
-    logger.exception("could not apply expenses.amount -> NUMERIC(12,2) schema patch")
+    logger.info("schema patch applied: %s.%s", _table, _column)
+
+# amount was FLOAT: summing a FLOAT column uses the same imprecise binary
+# floating-point arithmetic Python's `float` uses, so monthly/yearly report
+# totals (func.sum(Expense.amount)) drifted by fractions of a cent over
+# enough rows. NUMERIC sums exactly instead.
+#
+# Checked via information_schema (same reasoning as above), and the ALTER
+# syntax itself differs by dialect - MySQL's MODIFY COLUMN has no Postgres
+# equivalent; Postgres needs ALTER COLUMN ... TYPE.
+with engine.connect() as _conn:
+    _amount_type = _conn.execute(
+        text("SELECT data_type FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'amount'")
+    ).scalar()
+if _amount_type and _amount_type.lower() not in ("numeric", "decimal"):
+    _amount_ddl = (
+        "ALTER TABLE expenses ALTER COLUMN amount TYPE NUMERIC(12, 2)"
+        if engine.dialect.name == "postgresql"
+        else "ALTER TABLE expenses MODIFY COLUMN amount NUMERIC(12, 2) NOT NULL"
+    )
+    try:
+        with engine.connect() as _conn:
+            _conn.execute(text(_amount_ddl))
+            _conn.commit()
+        logger.info("schema patch applied: expenses.amount -> NUMERIC(12,2)")
+    except (OperationalError, ProgrammingError):
+        logger.exception("could not apply expenses.amount -> NUMERIC(12,2) schema patch")
 
 # Idempotent: finds-or-creates the OpenFGA store/model. Safe to call on
 # every startup, including against data left over from a previous run.
