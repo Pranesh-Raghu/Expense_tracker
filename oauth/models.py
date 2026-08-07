@@ -10,6 +10,17 @@ def utcnow() -> datetime:
     # tz-aware value written here comes back naive on read - comparing that
     # against a tz-aware "now" then raises TypeError. Keeping everything
     # naive-but-UTC avoids the mismatch.
+    #
+    # Every DateTime column below is declared plain - DateTime(), not
+    # DateTime(timezone=True) - for the same reason: on Postgres (this app's
+    # production DB; MySQL is local dev), timezone=True creates a real
+    # TIMESTAMPTZ column, which interprets an inserted naive value as being
+    # in the CONNECTION's current timezone before converting it to UTC for
+    # storage. Since every value this app writes is already naive-but-UTC,
+    # that interpretation is only correct by accident (if the connection's
+    # timezone happens to be UTC) - a plain DateTime()/TIMESTAMP column does
+    # no interpretation at all, storing exactly the value given, matching
+    # MySQL's actual behavior on both databases instead of just one.
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -30,7 +41,7 @@ class OAuthClient(Base):
     response_types = Column(Text, nullable=False)  # JSON-encoded list[str]
     token_endpoint_auth_method = Column(String(64), nullable=False, default="none")
     scope = Column(String(512), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(), default=utcnow)
 
 
 class AuthorizationCode(Base):
@@ -52,7 +63,7 @@ class AuthorizationCode(Base):
     resource = Column(String(1024), nullable=True)
     code_challenge = Column(String(255), nullable=False)
     code_challenge_method = Column(String(16), nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(), nullable=False)
     used = Column(Boolean, default=False)
 
 
@@ -64,7 +75,7 @@ class RefreshToken(Base):
     user_id = Column(Integer, nullable=False)
     scope = Column(String(512), nullable=True)
     resource = Column(String(1024), nullable=True)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(), nullable=False)
     revoked = Column(Boolean, default=False)
 
     # Shared by every refresh token in one rotation lineage: the token
@@ -82,8 +93,8 @@ class RefreshToken(Base):
     # sessions" in most real apps.
     user_agent = Column(String(512), nullable=True)
     ip_address = Column(String(64), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    last_used_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(), default=utcnow)
+    last_used_at = Column(DateTime(), default=utcnow)
 
 
 class RevokedAccessToken(Base):
@@ -92,7 +103,7 @@ class RevokedAccessToken(Base):
     __tablename__ = "oauth_revoked_access_tokens"
 
     jti = Column(String(255), primary_key=True)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(), nullable=False)
 
 
 class ApiKey(Base):
@@ -108,8 +119,8 @@ class ApiKey(Base):
     key_hash = Column(String(255), primary_key=True)
     user_id = Column(Integer, nullable=False)
     name = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(), default=utcnow)
+    last_used_at = Column(DateTime(), nullable=True)
     revoked = Column(Boolean, default=False)
 
 
@@ -133,7 +144,7 @@ class TrustedIssuer(Base):
     # JSON list of client_ids allowed to use this issuer; null/empty = any
     # registered (DCR or CIMD) client may.
     allowed_client_ids = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(), default=utcnow)
 
 
 class WebhookEndpoint(Base):
@@ -149,7 +160,7 @@ class WebhookEndpoint(Base):
     secret = Column(String(255), nullable=False)
     events = Column(Text, nullable=False)  # JSON list, e.g. ["expense.created", "expense.shared"]
     created_by_user_id = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(), default=utcnow)
     active = Column(Boolean, default=True)
 
 
@@ -164,6 +175,6 @@ class PasswordlessToken(Base):
 
     token_hash = Column(String(255), primary_key=True)
     user_id = Column(Integer, nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(), nullable=False)
     used = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(), default=utcnow)

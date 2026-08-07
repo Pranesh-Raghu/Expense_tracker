@@ -96,6 +96,48 @@ if _amount_type and _amount_type.lower() not in ("numeric", "decimal"):
     except (OperationalError, ProgrammingError):
         logger.exception("could not apply expenses.amount -> NUMERIC(12,2) schema patch")
 
+# oauth/models.py's timestamp columns used to be DateTime(timezone=True),
+# which - on Postgres only, MySQL's DATETIME has no timezone concept either
+# way - creates a real TIMESTAMPTZ column. Every value this app writes is a
+# naive-but-UTC datetime (see oauth/models.py's utcnow()); inserting one
+# into a TIMESTAMPTZ column makes Postgres interpret it as being in the
+# CONNECTION's current timezone before converting to UTC for storage - only
+# correct by accident if that happened to be UTC already. The models now
+# declare plain DateTime()/TIMESTAMP (see oauth/models.py); this converts
+# any already-deployed TIMESTAMPTZ columns to match, forcing the session to
+# UTC first so the conversion extracts the correct value regardless of
+# whatever the connection's default timezone actually was.
+if engine.dialect.name == "postgresql":
+    _TIMEZONE_AWARE_COLUMNS = [
+        ("oauth_clients", "created_at"),
+        ("oauth_authorization_codes", "expires_at"),
+        ("oauth_refresh_tokens", "expires_at"),
+        ("oauth_refresh_tokens", "created_at"),
+        ("oauth_refresh_tokens", "last_used_at"),
+        ("oauth_revoked_access_tokens", "expires_at"),
+        ("api_keys", "created_at"),
+        ("api_keys", "last_used_at"),
+        ("oauth_trusted_issuers", "created_at"),
+        ("webhook_endpoints", "created_at"),
+        ("passwordless_tokens", "expires_at"),
+        ("passwordless_tokens", "created_at"),
+    ]
+    for _table, _column in _TIMEZONE_AWARE_COLUMNS:
+        with engine.connect() as _conn:
+            _current_type = _conn.execute(
+                text("SELECT data_type FROM information_schema.columns WHERE table_name = :t AND column_name = :c"),
+                {"t": _table, "c": _column},
+            ).scalar()
+        if _current_type and _current_type.lower() == "timestamp with time zone":
+            try:
+                with engine.connect() as _conn:
+                    _conn.execute(text("SET timezone = 'UTC'"))
+                    _conn.execute(text(f"ALTER TABLE {_table} ALTER COLUMN {_column} TYPE TIMESTAMP"))
+                    _conn.commit()
+                logger.info("schema patch applied: %s.%s -> TIMESTAMP (was TIMESTAMPTZ)", _table, _column)
+            except (OperationalError, ProgrammingError):
+                logger.exception("could not apply %s.%s -> TIMESTAMP schema patch", _table, _column)
+
 # Idempotent: finds-or-creates the OpenFGA store/model. Safe to call on
 # every startup, including against data left over from a previous run.
 authz_client.bootstrap()
