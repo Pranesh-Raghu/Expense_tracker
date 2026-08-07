@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from controller import user_controller, expense_controller
 from database import engine, Base
 import auth
+import keepwarm
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
@@ -209,6 +210,10 @@ app.include_router(oauth_router, tags=["oauth"])
 # Mock external IdP for demonstrating Cross-App Access - see mock_idp.py's
 # module docstring. Not something a real deployment would run.
 app.include_router(mock_idp.router, prefix="/mock-idp", tags=["mock-idp (demo only)"])
+
+# Keeps OpenFGA warm on Render's free tier - see keepwarm.py and
+# .github/workflows/keepwarm.yml.
+app.include_router(keepwarm.router, tags=["keepwarm"])
 
 # MCP server (protected resource). mcp_app itself already lays out the /mcp
 # endpoint plus its own RFC 9728 metadata routes (see mcp_server.py), so it's

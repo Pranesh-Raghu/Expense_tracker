@@ -9,6 +9,14 @@ def auth_header(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_keepwarm_ping_is_public_and_reaches_openfga(base_url):
+    # No auth needed - this is what a free external scheduled pinger hits
+    # to keep OpenFGA's Render service from spinning down (see keepwarm.py).
+    resp = requests.get(f"{base_url}/internal/keepwarm")
+    assert resp.status_code == 200
+    assert resp.json()["openfga"] == "ok"
+
+
 def test_cross_app_access_exchange(base_url):
     username = unique("xaa")
     create_user(base_url, username, "password123")

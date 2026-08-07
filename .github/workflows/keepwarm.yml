@@ -1,0 +1,32 @@
+# Keeps OpenFGA (a private Render service on the free tier - see
+# render.yaml's comments) from spinning down. GitHub Actions' own scheduler
+# is used here purely as a free, no-account-needed cron trigger - it has
+# nothing to do with this repo's CI; see keepwarm.py for what actually
+# happens on each ping.
+#
+# TODO: same chicken-and-egg caveat as render.yaml's own placeholder URLs -
+# replace APP_URL below with the app service's real onrender.com hostname
+# (or your custom domain) once known after its first deploy.
+#
+# GitHub's schedule trigger is best-effort and can slip by several minutes
+# under load, especially on public runners - this is fine here, since the
+# goal is "don't let 15+ minutes of total silence pass," not precise timing.
+name: Keep OpenFGA warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {} # lets you trigger a ping manually from the Actions tab
+
+env:
+  APP_URL: https://expense-tracker-app.onrender.com
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /internal/keepwarm
+        run: |
+          curl -sf --max-time 30 "${APP_URL}/internal/keepwarm" \
+            && echo "keepwarm ping succeeded" \
+            || echo "keepwarm ping failed (app or OpenFGA may be down - not failing the workflow over a single missed ping)"
