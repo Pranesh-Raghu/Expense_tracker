@@ -36,6 +36,14 @@ class OAuthClient(Base):
 class AuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
 
+    # Despite the name, this holds a SHA-256 hash of the code, not the raw
+    # value - see oauth/service.py's create_authorization_code /
+    # consume_authorization_code, both of which hash it before writing/
+    # querying. Kept the column name as-is (rather than code_hash, matching
+    # token_hash/key_hash elsewhere) to avoid a schema migration for what's
+    # a defense-in-depth improvement, not a fix for an actively exploitable
+    # gap - PKCE's code_verifier (never persisted) is still required to
+    # complete an exchange even with this value in hand.
     code = Column(String(255), primary_key=True)
     client_id = Column(String(1024), nullable=False)
     user_id = Column(Integer, nullable=False)
@@ -146,10 +154,11 @@ class WebhookEndpoint(Base):
 
 
 class PasswordlessToken(Base):
-    """A one-time magic-link token. No email service exists in this project,
-    so the raw token is returned directly in the API response instead of
-    being emailed - that's the demo stand-in, not the intended real-world
-    delivery mechanism."""
+    """A one-time magic-link token, emailed to the account's address (see
+    email_sender.py) - never returned in the /auth/passwordless/request
+    response itself. Returning it there would let anyone who knows a
+    username log in as them with zero credentials, which is exactly what
+    this endpoint used to do before email_sender.py existed."""
 
     __tablename__ = "passwordless_tokens"
 

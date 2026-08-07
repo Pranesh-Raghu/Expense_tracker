@@ -153,7 +153,14 @@ def create_authorization_code(*, client_id: str, user_id: int, redirect_uri: str
     code = secrets.token_urlsafe(48)
     with SessionLocal() as db:
         db.add(AuthorizationCode(
-            code=code,
+            # Hashed at rest, same as every other bearer credential this app
+            # issues (RefreshToken.token_hash, ApiKey.key_hash,
+            # PasswordlessToken.token_hash) - a DB-read compromise alone
+            # already can't complete an exchange (PKCE's code_verifier,
+            # never persisted, is still required), but there's no reason to
+            # hand over the raw code too if that's ever combined with a
+            # leaked/intercepted verifier.
+            code=_hash_token(code),
             client_id=client_id,
             user_id=user_id,
             redirect_uri=redirect_uri,
@@ -170,7 +177,7 @@ def create_authorization_code(*, client_id: str, user_id: int, redirect_uri: str
 
 def consume_authorization_code(*, code: str, client_id: str, redirect_uri: str, code_verifier: str) -> dict:
     with SessionLocal() as db:
-        record = db.query(AuthorizationCode).filter(AuthorizationCode.code == code).first()
+        record = db.query(AuthorizationCode).filter(AuthorizationCode.code == _hash_token(code)).first()
         if not record:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_grant: unknown code")
         if record.used:
