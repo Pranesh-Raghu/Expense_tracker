@@ -51,13 +51,15 @@ class User(Base):
     def create_user(user_credentials):
 
         with SessionLocal() as db:
-           last_user = db.query(User).order_by(User.id.desc()).first()
-           new_id = last_user.id + 1 if last_user else 1
-
+           # `id` is an autoincrement primary key - the DB assigns it.
+           # Computing it manually as "highest existing id + 1" (the old
+           # code here) races under concurrent signups: two requests can
+           # read the same max id before either commits, and the second
+           # insert then fails with an unhandled 500 instead of a clean
+           # signup. Same class of bug already fixed for Expense.create_expense.
            username = User.generate_username_from_email(user_credentials.email, db)
            hashed_password = pwd_context.hash(user_credentials.password)
-           db_user = User(id = new_id,
-                          username = username,
+           db_user = User(username = username,
                           email = user_credentials.email,
                           password = hashed_password,
                           )
@@ -86,12 +88,10 @@ class User(Base):
                     db.refresh(existing)
                 return existing
 
-            last_user = db.query(User).order_by(User.id.desc()).first()
-            new_id = last_user.id + 1 if last_user else 1
-
+            # Same reasoning as create_user above: let the DB's autoincrement
+            # assign `id` instead of racily computing it here.
             username = User.generate_username_from_email(email, db)
             db_user = User(
-                id=new_id,
                 username=username,
                 email=email,
                 password=pwd_context.hash(secrets.token_urlsafe(32)),
