@@ -11,6 +11,18 @@ def test_registration_stays_public(base_url):
     assert resp.status_code == 201
 
 
+def test_duplicate_email_signup_is_rejected_not_a_500(base_url):
+    # Signing up twice with the same email used to crash with an unhandled
+    # IntegrityError/500 - there was no pre-check and no exception handling
+    # around the insert. Should be a clean 409, not a stack trace.
+    email = f"{unique('dupe')}@example.com"
+    first = requests.post(f"{base_url}/users/", json={"email": email, "password": "password123"})
+    assert first.status_code == 201
+
+    second = requests.post(f"{base_url}/users/", json={"email": email, "password": "password456"})
+    assert second.status_code == 409
+
+
 def test_listing_requires_auth(base_url):
     resp = requests.get(f"{base_url}/users/")
     assert resp.status_code == 401

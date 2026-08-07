@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import Column, Integer, String,Boolean
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from database import Base, SessionLocal
 from passlib.context import CryptContext
@@ -47,6 +48,14 @@ class User(Base):
             suffix += 1
         return candidate
 
+    # generate_username_from_email's uniqueness check and the insert below
+    # aren't atomic - two signups racing on the same email local part can
+    # both see a candidate username as free right before one of them claims
+    # it. A couple of retries (regenerating the username against the
+    # now-current state each time) turns that rare, recoverable collision
+    # into a clean success instead of a 500 - see create_user below.
+    MAX_CREATE_ATTEMPTS = 3
+
     @staticmethod
     def create_user(user_credentials):
 
@@ -57,16 +66,32 @@ class User(Base):
            # read the same max id before either commits, and the second
            # insert then fails with an unhandled 500 instead of a clean
            # signup. Same class of bug already fixed for Expense.create_expense.
-           username = User.generate_username_from_email(user_credentials.email, db)
-           hashed_password = pwd_context.hash(user_credentials.password)
-           db_user = User(username = username,
-                          email = user_credentials.email,
-                          password = hashed_password,
-                          )
-           db.add(db_user)
-           db.commit()
-           db.refresh(db_user)
-           return db_user
+           for attempt in range(1, User.MAX_CREATE_ATTEMPTS + 1):
+               username = User.generate_username_from_email(user_credentials.email, db)
+               hashed_password = pwd_context.hash(user_credentials.password)
+               db_user = User(username = username,
+                              email = user_credentials.email,
+                              password = hashed_password,
+                              )
+               db.add(db_user)
+               try:
+                   db.commit()
+               except IntegrityError:
+                   db.rollback()
+                   # Checking which column collided by re-querying, rather
+                   # than parsing the driver's error message (fragile,
+                   # varies by DB/driver) - if an email match now exists,
+                   # this really is a duplicate account (no signup existed a
+                   # moment ago, but one does now - ours or a concurrent
+                   # one, doesn't matter which). Otherwise it's the username
+                   # collision above, worth retrying.
+                   if db.query(User).filter(User.email == user_credentials.email).first():
+                       raise HTTPException(status_code=409, detail="A user with that email already exists.")
+                   if attempt < User.MAX_CREATE_ATTEMPTS:
+                       continue
+                   raise HTTPException(status_code=500, detail="Could not create user, please try again.")
+               db.refresh(db_user)
+               return db_user
 
     @staticmethod
     def find_or_create_by_email(email: str, picture_url: Optional[str] = None):
@@ -89,18 +114,33 @@ class User(Base):
                 return existing
 
             # Same reasoning as create_user above: let the DB's autoincrement
-            # assign `id` instead of racily computing it here.
-            username = User.generate_username_from_email(email, db)
-            db_user = User(
-                username=username,
-                email=email,
-                password=pwd_context.hash(secrets.token_urlsafe(32)),
-                picture_url=picture_url,
-            )
-            db.add(db_user)
-            db.commit()
-            db.refresh(db_user)
-            return db_user
+            # assign `id` instead of racily computing it here, and retry on
+            # a username collision from the same TOCTOU gap.
+            for attempt in range(1, User.MAX_CREATE_ATTEMPTS + 1):
+                username = User.generate_username_from_email(email, db)
+                db_user = User(
+                    username=username,
+                    email=email,
+                    password=pwd_context.hash(secrets.token_urlsafe(32)),
+                    picture_url=picture_url,
+                )
+                db.add(db_user)
+                try:
+                    db.commit()
+                except IntegrityError:
+                    db.rollback()
+                    # Unlike create_user, this is idempotent by design (it's
+                    # "find OR create") - if a concurrent request for this
+                    # same brand-new email already won the race, just return
+                    # what it created instead of erroring.
+                    winner = db.query(User).filter(User.email == email).first()
+                    if winner:
+                        return winner
+                    if attempt < User.MAX_CREATE_ATTEMPTS:
+                        continue
+                    raise
+                db.refresh(db_user)
+                return db_user
 
     @staticmethod
     def get_users():
