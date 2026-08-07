@@ -45,6 +45,45 @@ def test_pkce_wrong_verifier_is_rejected(base_url):
     assert "PKCE" in token_resp.json()["detail"]
 
 
+def test_pkce_malformed_verifier_is_rejected_not_a_500(base_url):
+    # A code_verifier outside RFC 7636's charset (here: non-ASCII) used to
+    # reach code_verifier.encode("ascii") unchecked and raise
+    # UnicodeEncodeError - an unhandled 500 instead of a clean invalid_grant.
+    username = unique("oauth")
+    create_user(base_url, username, "password123")
+    client_id = register_client(base_url)
+    _verifier, challenge = pkce_pair()
+
+    resp = requests.post(
+        f"{base_url}/oauth/authorize",
+        data={
+            "username": username,
+            "password": "password123",
+            "decision": "approve",
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:9000/callback",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "x",
+        },
+        allow_redirects=False,
+    )
+    code = resp.headers["location"].split("code=")[1].split("&")[0]
+
+    token_resp = requests.post(
+        f"{base_url}/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "http://localhost:9000/callback",
+            "code_verifier": "not-ascii-é" * 6,  # 43+ chars, contains é
+            "client_id": client_id,
+        },
+    )
+    assert token_resp.status_code == 400
+    assert "PKCE" in token_resp.json()["detail"]
+
+
 def test_authorization_code_is_single_use(base_url):
     username = unique("oauth")
     create_user(base_url, username, "password123")
